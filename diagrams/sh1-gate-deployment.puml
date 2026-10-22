@@ -61,8 +61,11 @@ note bottom of tuple
   The earlier F failure rule is replaced; proof runs on all three lanes at Z/C1.
   Cut-first work stays in a private working fork.
   Board repository keeps its in-tree session package/dependencies until C1.
-  Z proof failure: no immutable tag; fork stays on the commit-pinned module.
-  Board repository unchanged; fix module/fork and rerun Z.
+  Z publishes an immutable candidate tag and runs all three lanes against it.
+  Failed proof: keep the tag unchanged, never move or delete it; record it as rejected.
+  Release acceptance and C1 stay blocked.
+  Fork keeps its commit-pinned require/replace and does not adopt the tag.
+  Board repository unchanged; publish the fix as a new candidate tag/version and rerun Z.
   C1 proof failure: defer cutover (§2.6); quiescence/rollback unchanged.
   Tests/builds run on CI, never development host.
 end note
