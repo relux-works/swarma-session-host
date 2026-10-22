@@ -58,9 +58,12 @@ end note
 note bottom of tuple
   No invented tuple wire format, artifact retention or CI process UIDs:
   unspecified in spec §2.4 / docs gate guide.
-  F is provisional until snapshot closes; F proves representative lanes 1/2.
-  F failure stops SH1 at mechanical compatibility milestone;
-  board keeps dependencies. Z/C1 rerun all three lanes on released bytes.
+  The earlier F failure rule is replaced; proof runs on all three lanes at Z/C1.
+  Cut-first work stays in a private working fork.
+  Board repository keeps its in-tree session package/dependencies until C1.
+  Z proof failure: no immutable tag; fork stays on the commit-pinned module.
+  Board repository unchanged; fix module/fork and rerun Z.
+  C1 proof failure: defer cutover (§2.6); quiescence/rollback unchanged.
   Tests/builds run on CI, never development host.
 end note
 note bottom of cutover
