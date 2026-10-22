@@ -1,6 +1,7 @@
 # swarma-session-host: specification
 
-- **Status:** draft r13 (2026-10-13; accepted architecture-review findings). The session-manager package has not moved; hosted gate tooling is a separate prototype.
+- **Status:** draft r14 (2026-10-22; approved SH1 cut-first order). The session-manager package has not moved; hosted gate tooling is a separate prototype.
+- **Revision:** r14 records the approved SH1 cut-first order and interim fork acceptance gate (2026-10-22). It corrects the production Muse PTY registration fact; the MSP factory remains unregistered.
 - **Revision:** r13 applies accepted architecture-review findings (2026-10-13): complete signed-intent replay binding, retained producer/aggregate storage debt and protected control/evidence reserve, positive placement/role eligibility and inert exact-candidate review before qualified tree entry. Optional reviewer policies stay unchosen and off; formats and qualification remain activation gates. No implementation, qualification or activation is claimed.
 - **Revision:** r12 applies accepted architecture-review findings (2026-10-13): owner-linked names and draft-status references, Muse priority, complete exec invocation and protected policy pins, v0 watcher/status-only alerts, direct node-stop progress and bounded workspace cleanup/repair with mode-aware manifests. The v1 freeze lifecycle remains open; optional standing discard stays unchosen and off. Figures follow the text; no implementation, qualification or activation is claimed.
 - **Revision:** r11 applies the wave-5b review fixes, web default-off and trusted-circle opt-ins, read-only task resources and the N15 listener revision. Stop states require confirmed absence; the workplace write fence belongs to `swarma-rb-exec`; repeated ownership notes become short references. Hosted-launch r6 is retained only as input to the swarma path, with its superseded receiver explicitly marked.
@@ -33,8 +34,8 @@ it does not define new internal APIs.
 ### 1.1 Today *(fact, at the pinned source)*
 
 - One control plane per board, keyed by `BoardKey`; state in the user state directory; self-restoring start-up; one daemon per board.
-- The daemon registers two provider factories: Claude (a PTY the daemon owns) and Codex (a private app-server per session). Codex goals are delivered as text directives; its native goals are disabled.
-- The Muse code is present but not registered: the MSP provider host and the Muse PTY host (`musepty`) exist with their tests; their factory registration and command-line dispatch are later work. The hosted launch route decodes its input and always refuses capability admission.
+- The daemon registers Claude (a PTY the daemon owns), Codex (a private app-server per session) and Muse PTY provider factories. Codex goals are delivered as text directives; its native goals are disabled.
+- At skill-project-management `077e000e6`, `musepty.NewMusePTYHostFactory` is registered in production (`cmd/tb-sessiond/main.go:142` and `boardless.go:35`); only the MSP `MuseHostFactory` is unregistered. The hosted launch route decodes its input and always refuses capability admission.
 - Goals are applied inside the board's write transaction; Claude acknowledges the exact rendered revision; deferred application has an acknowledgement waiter.
 - Notices: a durable inbox per session, written directly by board producers, delivered only while a client is attached.
 - A Claude session dies when the daemon is replaced (the daemon holds the PTY master).
@@ -66,7 +67,7 @@ The complete recursive snapshot of the package and its sub-packages at a pinned 
 | tests (root and `musepty`) | 175 | 95,031 |
 | fixture programs and their test | 3 | 1,682 |
 
-plus 18 non-Go files (the PTY grammar, the captured terminal corpus, schema and dispatch goldens, the hosted diagnostic registry). Inclusion is not activation: the Muse factories stay unregistered and the hosted route stays closed in SH1.
+plus 18 non-Go files (the PTY grammar, the captured terminal corpus, schema and dispatch goldens, the hosted diagnostic registry). Muse PTY's factory is already registered; the MSP factory stays unregistered and the hosted route stays closed in SH1.
 
 ### 2.2 What stays in task-board
 
@@ -85,7 +86,7 @@ The file-backed notice API stays as it is in SH1. The goal contracts above descr
 
 **Two authorities, kept apart.** The board's adapter authorises board facts: target, run, ancestry and publication. The host keeps its **independent machine-local context policy**: local clearance, builder allowlist, payload mode and enforcement key, from local configuration and the authenticated transport, never from a board record; with its fail-closed defaults and ordering, before launch and before restore-for-cleanup, and with absence distinguished from a read error. Denial tests are bound to the production path across the converters.
 
-Provider success means exactly what it means today: Claude's exact acknowledgement and deferral; Codex's text directives; Muse's accepted adapter behaviour (unregistered).
+Provider success means exactly what it means today: Claude's exact acknowledgement and deferral; Codex's text directives; Muse's accepted adapter behaviour (PTY factory registered, MSP factory unregistered).
 
 ### 2.4 The gate: three lanes
 
@@ -99,17 +100,23 @@ lane ownership, evidence provenance, the bounded prototype and release gates.
 - **F**, the first landing, proves a representative final graph on lanes 1 and 2 before the neutral interfaces are committed; Z and C1 rerun all three lanes against the released candidate. If F fails, SH1 stops at the mechanical compatibility milestone and the board keeps its dependencies.
 - **Not evidence of more than it is:** existing opt-in smoke tests (MSP, schema export, PTY) and tagged mutation lanes keep their opt-in status; SH1's suites say nothing about the platform canons of §3.
 
+Until the three-lane gate applies at Z/C1, each landing is accepted on green fork suites on the lane's self-hosted build host (commands and exit codes in the PR; the fork has no hosted CI runner) plus an independent reviewer distinct from the producer.
+
 The hosted prototype, its measured scope and its failures are recorded in [`docs/sh1-gate.md`](../docs/sh1-gate.md). Neither that tooling nor this extraction plan establishes runtime migration. No tests or builds run on the development host. Public lane artifacts contain only the allowlisted reports described in the gate guide; private checkouts and raw logs are not uploaded as lane artifacts. The accepted public-log exposure is separate from artifact publication.
 
 ### 2.5 Order of work
 
-1. Confirm the graph and composition choice (§2.2).
-2. **F**: prototype the three-lane proof; record the board commit, host tree, projection generator, helper, test and fixture hashes, module graph and environment; F stays provisional until the copy snapshot closes.
-3. Schedule the freeze with the board's arbiter, after the Muse work currently landing in the package (expected around 13–14 October); pin the accepted source.
-4. **O**: the snapshot copy; provenance review and leak scan before the first public push.
-5. **G** and **X** (in parallel only on disjoint, frozen contracts), then **Y**.
-6. **Z**: dependency exit, immutable tag, no local replacements; rerun the lanes.
-7. Consumer validation on the tag; **C1** after the calendar gate.
+Confirm the graph and composition choice (§2.2). The approved order cuts the session package's dependencies on `pkg/board` and `pkg/remoteconfig` inside a private working fork before copying the snapshot here. The public module MUST never carry a private import and MUST build standalone from its first landing. This replaces the previous copy-first order and F's earlier timing in §2.4; the three-lane proof applies at Z/C1. **O** is S1b; **G/X/Y**'s seam, dependency and package work follows S1a, S2a and S2b below.
+
+1. **S0**: baseline goldens. For **F**'s proof, record the board commit, host tree, projection generator, helper, test and fixture hashes, module graph and environment; F stays provisional until the copy snapshot closes.
+2. **S0b**: plugin-wire, hosted-route and registration goldens.
+3. Wait for the in-flight board changes that touch the package. Schedule the freeze with the board's arbiter and pin the accepted source.
+4. **S1a**: publish the seam dispositions (§2.3).
+5. **S2a**: cut the board dependencies in the fork. Put a generic goal interface and narrow host-side interfaces in the session package; keep the board compatibility adapter in the fork.
+6. **S1b / O**: copy the snapshot into this module. Complete provenance review and leak scan before the first public push. The fork consumes the module pinned by commit; all fork suites MUST be green.
+7. **S2b**: split the host and runner packages along the service/runner seam. Keep the single input writer and controller epoch in `host/`.
+8. **Z**: publish the immutable tag; the fork drops its `replace`. No local replacements; run all three lanes.
+9. Consumer validation on the tag; **C1** after the calendar gate, with all three lanes green.
 
 After O the old source is frozen: each change in flight gets its accepted commit, destination commit, one named forward-port integrator and a validation identity in the freeze manifest; active reviews finish on their original base; after every accepted forward port the baseline is regenerated and the affected evidence rerun. No second runtime is authored in parallel.
 

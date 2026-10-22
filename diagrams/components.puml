@@ -93,8 +93,8 @@ note bottom of adapters
   Current / SH1: all serving concerns remain composed into tb-sessiond;
   daemon owns Claude PTY and private Codex app-server (§1, §2).
   Claude: exact rendered revision ack / deferral; Codex: text directives,
-  native goals disabled. Muse adapter behavior retained but unregistered.
-  Muse factories stay unregistered; hosted capability route refuses.
+  native goals disabled. Muse adapter behavior retained.
+  Muse PTY factory registered; MSP unregistered; hosted capability route refuses.
 end note
 note bottom of approval
   First valid CAS resolution only; ordinary user turn is not approval.

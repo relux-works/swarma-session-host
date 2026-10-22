@@ -18,7 +18,7 @@ package "Current / SH1 extraction (no behaviour change)" {
   note bottom of daemon
     SH1 supplies a serving library; executable stays in board through C1.
     Claude dies on daemon replacement; startup is self-restoring.
-    Muse MSP / musepty code is unregistered.
+    Muse PTY factory registered in production; MSP factory unregistered.
     Hosted launch decodes input, then refuses capability admission.
     Recovery details beyond these facts: unspecified in spec §1.1.
   end note
