@@ -20,17 +20,34 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       commit: ${{ steps.identity.outputs.commit }}
+      go_version: ${{ steps.identity.outputs.go_version }}
+    env:
+      PRIVATE_SOURCE_REPO: ${{ secrets.PRIVATE_SOURCE_REPO }}
+      PRIVATE_SOURCE_CLI_DIR: ${{ secrets.PRIVATE_SOURCE_CLI_DIR }}
+      PRIVATE_SOURCE_MODULE: ${{ secrets.PRIVATE_SOURCE_MODULE }}
     steps:
+      - name: Validate private source configuration
+        shell: bash
+        run: |
+          for name in PRIVATE_SOURCE_REPO PRIVATE_SOURCE_CLI_DIR PRIVATE_SOURCE_MODULE; do
+            value="${!name}"
+            if [[ -z "${value//[[:space:]]/}" ]]; then
+              echo "$name must be set as a repository secret before running this workflow" >&2
+              exit 1
+            fi
+          done
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
-          repository: relux-works/skill-project-management
-          ref: ${{ inputs.spm_ref || 'main' }}
-          token: ${{ secrets.SPM_READ_TOKEN }}
+          path: host
           persist-credentials: false
-          sparse-checkout: tools/board-cli/go.mod
-          sparse-checkout-cone-mode: false
-      - id: identity
-        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          show-progress: false
+      - name: Resolve private source quietly
+        id: identity
+        env:
+          PRIVATE_SOURCE_REPO: ${{ secrets.PRIVATE_SOURCE_REPO }}
+          SPM_READ_TOKEN: ${{ secrets.SPM_READ_TOKEN }}
+          SH1_SOURCE_REF: ${{ inputs.spm_ref || 'main' }}
+        run: python3 host/tools/sh1/ci/checkout.py source
 
   lanes:
     needs: source
@@ -55,21 +72,23 @@ jobs:
       GOTOOLCHAIN: local
       GOWORK: 'off'
       GOFLAGS: ''
+      PRIVATE_SOURCE_CLI_DIR: ${{ secrets.PRIVATE_SOURCE_CLI_DIR }}
+      PRIVATE_SOURCE_MODULE: ${{ secrets.PRIVATE_SOURCE_MODULE }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           path: host
           persist-credentials: false
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with:
-          repository: relux-works/skill-project-management
-          ref: ${{ needs.source.outputs.commit }}
-          path: board
-          token: ${{ secrets.SPM_READ_TOKEN }}
-          persist-credentials: false
+          show-progress: false
+      - name: Fetch private source quietly
+        env:
+          PRIVATE_SOURCE_REPO: ${{ secrets.PRIVATE_SOURCE_REPO }}
+          SPM_READ_TOKEN: ${{ secrets.SPM_READ_TOKEN }}
+          SH1_SOURCE_REF: ${{ needs.source.outputs.commit }}
+        run: python3 host/tools/sh1/ci/checkout.py lane
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
-          go-version-file: board/tools/board-cli/go.mod
+          go-version: ${{ needs.source.outputs.go_version }}
           cache: false
       - name: Run lane and record actual exits
         env:

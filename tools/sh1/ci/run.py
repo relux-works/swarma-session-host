@@ -2,7 +2,8 @@
 import hashlib
 import json
 import os
-from pathlib import Path
+import re
+from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
 import sys
@@ -10,12 +11,38 @@ import time
 import zipfile
 
 MODULE = "github.com/relux-works/swarma-session-host"
-PACKAGE = "github.com/aagrigore/task-board/internal/sessionmanager"
 TEST_COMMAND = ["go", "test", "-json", "-count=1", "-timeout=12m",
                 "./internal/sessionmanager", "./internal/sessionmanager/musepty"]
 REPORTS = {"summary.json", "manifest.json", "project.json", "inventory.json",
            "baseline-inventory.json", "equivalence.json", "guards.json",
            "mutations.json", "consumer.json"}
+
+
+def source_setting(environment, name, module=False):
+    value = environment.get(name, "")
+    if not value.strip():
+        raise ValueError(name + " must be set")
+    path = PurePosixPath(value)
+    if (path.is_absolute() or path.as_posix() != value or ".." in path.parts
+            or not re.fullmatch(r"[A-Za-z0-9._/-]+", value) or value == "."):
+        raise ValueError(name + " must be a safe relative path")
+    if module and ("." not in path.parts[0] or not re.fullmatch(r"[a-z0-9._/-]+", value)):
+        raise ValueError(name + " must be a supported module path")
+    return value
+
+
+def source_configuration(environment):
+    return (source_setting(environment, "PRIVATE_SOURCE_CLI_DIR"),
+            source_setting(environment, "PRIVATE_SOURCE_MODULE", module=True))
+
+
+def configured_mutations(path, source_module):
+    module = source_setting({"PRIVATE_SOURCE_MODULE": source_module}, "PRIVATE_SOURCE_MODULE", module=True)
+    declaration = json.loads(path.read_text())
+    for mutation in declaration["mutations"]:
+        relative = source_setting(mutation, "package")
+        mutation["package"] = module + "/" + relative
+    return declaration
 
 
 def sha(path):
@@ -26,12 +53,12 @@ def write(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-def outcome_set(inventory):
+def outcome_set(inventory, package):
     """Refuse unknown evidence; intentional skips and tagged absence are outcomes."""
     packages = {p["package"]: p for p in inventory["packages"]}
     if len(packages) != len(inventory["packages"]):
         raise ValueError("duplicate inventory package")
-    tested = {PACKAGE, PACKAGE + "/musepty"}
+    tested = {package, package + "/musepty"}
     if not tested.issubset(packages):
         raise ValueError("inventory must contain both tested packages")
     outcomes = {}
@@ -39,7 +66,7 @@ def outcome_set(inventory):
         row = packages[name]
         # Recursive discovery retains fixture declarations. Go's unchanged
         # two-package command does not select packages below testdata.
-        fixture = name.startswith((PACKAGE + "/testdata/", PACKAGE + "/musepty/testdata/"))
+        fixture = name.startswith((package + "/testdata/", package + "/musepty/testdata/"))
         if name not in tested and not fixture:
             raise ValueError("unexpected inventory package: " + name)
         if row["status"] not in (("not_observed",) if fixture else ("pass", "fail")):
@@ -68,8 +95,8 @@ def outcome_set(inventory):
     return outcomes
 
 
-def compare_inventories(baseline, projection, baseline_exit, projection_exit):
-    before, after = outcome_set(baseline), outcome_set(projection)
+def compare_inventories(baseline, projection, baseline_exit, projection_exit, package):
+    before, after = outcome_set(baseline, package), outcome_set(projection, package)
     differences = [{"package": key[0], "test": key[1], "baseline": before.get(key),
                     "projection": after.get(key)}
                    for key in sorted(before.keys() | after.keys()) if before.get(key) != after.get(key)]
@@ -78,9 +105,9 @@ def compare_inventories(baseline, projection, baseline_exit, projection_exit):
             "outcomes_compared": len(before), "differences": differences}
 
 
-def counts(inventory):
+def counts(inventory, package):
     tests = [t for p in inventory["packages"]
-             if p["package"] in (PACKAGE, PACKAGE + "/musepty") for t in p["tests"]]
+             if p["package"] in (package, package + "/musepty") for t in p["tests"]]
     return {"discovered": sum(bool(t.get("file")) for t in tests),
             "dynamic_subtests": sum(not bool(t.get("file")) for t in tests),
             "executed": sum(bool(t.get("executed")) for t in tests),
@@ -116,13 +143,21 @@ def publish_local_module(root, proxy):
                 raise RuntimeError("local module contains a symlink")
             if path.is_file():
                 archive.write(path, module + "@" + version + "/" + path.relative_to(root).as_posix())
+    return dest.parent
+
+
+def retained_library_report(proxy, modules):
+    return {str(p.relative_to(proxy)): sha(p) for module in modules
+            for p in sorted(module.rglob("*")) if p.is_file()}
 
 
 class Lane:
     def __init__(self):
+        self.cli_dir, self.source_module = source_configuration(os.environ)
+        self.package = self.source_module + "/internal/sessionmanager"
         self.host = Path("host").resolve()
         self.board = Path("board").resolve()
-        self.checkout = self.board / "tools/board-cli"
+        self.checkout = self.board / self.cli_dir
         self.temp = Path(os.environ["RUNNER_TEMP"]) / "sh1-work"
         self.temp.mkdir()
         self.reports = self.temp.parent / "sh1-reports"
@@ -140,30 +175,25 @@ class Lane:
     def command(self, args, cwd=None, env=None, required=True, events=None):
         args = [str(a) for a in args]
         started = time.monotonic()
-        print("RUN", self.safe(" ".join(args)), flush=True)
+        print("RUN command", len(self.summary["commands"]) + 1, flush=True)
         result = subprocess.run(args, cwd=cwd or self.host, env=env, capture_output=True)
-        # Raw output can contain board code; it stays in job logs, never artifacts.
+        # Raw output and arguments can reveal derived private identities; never echo them.
         out = result.stdout.decode(errors="replace")
-        err = result.stderr.decode(errors="replace")
         row = {"command": [self.safe(a) for a in args], "exit": result.returncode,
                "duration_seconds": round(time.monotonic() - started, 3)}
         self.summary["commands"].append(row)
         print("EXIT", result.returncode, flush=True)
         if events:
             events.write_bytes(result.stdout)
-            print(self.safe(out), end="")
             failures = []
             for line in out.splitlines():
                 ev = json.loads(line)
                 if ev.get("Action") in ("fail", "skip"):
                     failures.append({k: ev[k] for k in ("Action", "Package", "Test") if k in ev})
             self.summary.setdefault("test_terminals", {})[events.stem] = failures
-        else:
-            print(self.safe(out), end="")
-        print(self.safe(err), end="", file=sys.stderr)
         if result.returncode and required:
             self.summary["failures"].append(row)
-            raise RuntimeError("command refused: " + " ".join(row["command"]))
+            raise RuntimeError("command refused (exit " + str(result.returncode) + ")")
         return result
 
     def safe(self, text):
@@ -192,7 +222,7 @@ class Lane:
             args.append("-dropreplace=" + old["Path"] + ("@" + old["Version"] if old.get("Version") else ""))
         self.command(args + [mod])
         self.command([self.tool, "generate", "-source", self.checkout,
-                      "-package", "internal/sessionmanager", "-old", PACKAGE,
+                      "-package", "internal/sessionmanager", "-old", self.package,
                       "-new", MODULE, "-mod", mod, "-out", self.candidate])
         shutil.copyfile(self.candidate / "sh1-manifest.json", self.reports / "manifest.json")
         manifest = json.loads((self.reports / "manifest.json").read_text())
@@ -207,11 +237,11 @@ class Lane:
         targets = sorted(p.name for p in (self.checkout / "internal/sessionmanager").glob("claude*.go")
                          if not p.name.endswith("_test.go"))
         declaration = {"version": 1, "guards": [
-            {"package": PACKAGE, "test": "TestClaudeContextProductionHasNoFilesystemRemoval", "targets": targets},
-            {"package": PACKAGE, "test": "TestTheMutantInventoryCoversEveryPredicateOnTheRefusalPath",
+            {"package": self.package, "test": "TestClaudeContextProductionHasNoFilesystemRemoval", "targets": targets},
+            {"package": self.package, "test": "TestTheMutantInventoryCoversEveryPredicateOnTheRefusalPath",
              "targets": ["hosted_takeover_guard.go"]}],
             "opt_in": [
-                {"package": PACKAGE, "test": name, "condition": condition}
+                {"package": self.package, "test": name, "condition": condition}
                 for name, condition in (
                     ("TestClaudeHostLiveSmoke", "TASK_BOARD_CLAUDE_LIVE_SMOKE=1 and trusted project and Claude binary"),
                     ("TestClaudeAdoptionLiveSmoke", "TASK_BOARD_CLAUDE_LIVE_SMOKE=1 and trusted project and Claude binary"),
@@ -226,7 +256,7 @@ class Lane:
                       "-commit", self.summary["board_commit"], "-adapters",
                       self.host / "tools/sh1/ci/adapters.json", "-report", self.reports / "project.json"])
         inventory, projection_exit = self.test_inventory("projection", guards, "inventory.json")
-        diff = compare_inventories(baseline, inventory, baseline_exit, projection_exit)
+        diff = compare_inventories(baseline, inventory, baseline_exit, projection_exit, self.package)
         write(self.reports / "equivalence.json", diff)
         self.summary["equivalence"] = diff
         if not diff["equivalent"]:
@@ -239,8 +269,10 @@ class Lane:
         if self.summary["runner_os"] != "macOS":
             self.summary["mutations"] = "not run: mutations gate on macOS only"
             return
+        mutations = self.temp / "mutations.json"
+        write(mutations, configured_mutations(self.host / "tools/sh1/ci/mutations.json", self.source_module))
         result = self.command([self.tool, "mutate", "-checkout", self.checkout,
-                               "-mutations", self.host / "tools/sh1/ci/mutations.json",
+                               "-mutations", mutations,
                                "-report", self.reports / "mutations.json", "--"] + TEST_COMMAND, required=False)
         if result.returncode:
             self.summary["failures"].append({"gate": "mutations", "exit": result.returncode, "status": "unproven unless report records kills"})
@@ -257,11 +289,11 @@ class Lane:
         # The CLI writes a validated inventory before its guard-coverage refusal.
         # Missing/malformed evidence never becomes an informative coverage gap.
         inventory = json.loads(report.read_text())
-        outcome_set(inventory)
+        outcome_set(inventory, self.package)
         if measured.returncode not in (0, 1) or (measured.returncode == 1 and all(
                 g["reached"] == g["expected"] for g in inventory["guards"])):
             raise RuntimeError("inventory refused beyond informative guard coverage")
-        self.summary[label + "_inventory_counts"] = counts(inventory)
+        self.summary[label + "_inventory_counts"] = counts(inventory, self.package)
         self.summary[label + "_failed_tests"] = [
             {"package": p["package"], "test": t["name"]}
             for p in inventory["packages"] for t in p["tests"] if t["status"] == "fail"]
@@ -274,10 +306,9 @@ class Lane:
         self.command(["go", "mod", "download", "all"], self.checkout, env)
         proxy = self.temp / "proxy"
         shutil.copytree(cache / "cache/download", proxy)
-        for lib in ("board", "remoteconfig"):
-            publish_local_module(self.board / "pkg" / lib, proxy)
-        self.summary["retained_library_proxy"] = {str(p.relative_to(proxy)): sha(p) for p in sorted(proxy.rglob("*"))
-                                                  if p.is_file() and "skill-project-management/pkg" in str(p.relative_to(proxy))}
+        libraries = [publish_local_module(self.board / "pkg" / lib, proxy)
+                     for lib in ("board", "remoteconfig")]
+        self.summary["retained_library_proxy"] = retained_library_report(proxy, libraries)
         # Dependency exit: these tests need board-internal access and stay in lane 1.
         shutil.rmtree(self.checkout / "internal/sessionmanager")
         stamp = self.command(["git", "show", "-s", "--format=%ct", "HEAD"]).stdout.decode().strip()
@@ -308,7 +339,11 @@ class Lane:
 
 
 def main():
-    lane = Lane()
+    try:
+        lane = Lane()
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
     try:
         lane.prepare()
         if lane.summary["lane"] == "projection":
@@ -319,7 +354,7 @@ def main():
             raise RuntimeError("unknown lane")
     except Exception as error:
         lane.summary["failures"].append({"error": lane.safe(str(error))})
-        print(lane.safe(str(error)), file=sys.stderr)
+        print("Lane failed (" + type(error).__name__ + ")", file=sys.stderr)
     finally:
         lane.finish()
     return 1 if lane.summary["failures"] else 0

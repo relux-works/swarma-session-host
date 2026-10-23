@@ -1,4 +1,6 @@
 import copy
+import contextlib
+import io
 import json
 import importlib.util
 from pathlib import Path
@@ -10,7 +12,10 @@ spec = importlib.util.spec_from_file_location("lane", Path(__file__).with_name("
 lane = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(lane)
 
+PACKAGE = "example.org/source-cli/internal/sessionmanager"
 
+
+# These fixtures compare outcomes only inside the explicitly supplied source package.
 class BaselineEquivalenceTests(unittest.TestCase):
     def inventory(self):
         return {"packages": [{"package": name, "status": "pass", "tests": [
@@ -19,11 +24,11 @@ class BaselineEquivalenceTests(unittest.TestCase):
              "status": "skip", "reason": "qualified provider absent", "opt_in": "PROVIDER=1"},
             {"name": "TestTagged", "file": "mutant_test.go", "executed": False,
              "status": "not_observed", "tags": "mutants"}
-        ]} for name in (lane.PACKAGE, lane.PACKAGE + "/musepty")]}
+        ]} for name in (PACKAGE, PACKAGE + "/musepty")]}
 
     def test_intentional_skips_and_tagged_absence_are_equivalent(self):
         inv = self.inventory()
-        result = lane.compare_inventories(inv, copy.deepcopy(inv), 0, 0)
+        result = lane.compare_inventories(inv, copy.deepcopy(inv), 0, 0, PACKAGE)
         self.assertTrue(result["equivalent"])
         self.assertEqual(result["outcomes_compared"], 8)
 
@@ -45,7 +50,7 @@ class BaselineEquivalenceTests(unittest.TestCase):
                 else:
                     tests.append({"name": "TestRealEntry/new", "status": "pass", "executed": True})
                 for baseline, projection in ((before, after), (after, before)):
-                    result = lane.compare_inventories(baseline, projection, 0, 0)
+                    result = lane.compare_inventories(baseline, projection, 0, 0, PACKAGE)
                     self.assertFalse(result["equivalent"])
                     self.assertTrue(result["differences"])
 
@@ -54,34 +59,34 @@ class BaselineEquivalenceTests(unittest.TestCase):
         after["packages"].reverse()
         for package in after["packages"]:
             package["tests"].reverse()
-        self.assertTrue(lane.compare_inventories(before, after, 0, 0)["equivalent"])
+        self.assertTrue(lane.compare_inventories(before, after, 0, 0, PACKAGE)["equivalent"])
 
     def test_unselected_testdata_declarations_are_retained_and_compared(self):
         inv = self.inventory()
-        inv["packages"].append({"package": lane.PACKAGE + "/testdata/fake_msp_server",
+        inv["packages"].append({"package": PACKAGE + "/testdata/fake_msp_server",
                                 "status": "not_observed", "tests": [
                                     {"name": "TestFixture", "file": "internal/sessionmanager/testdata/fake_msp_server/main_test.go",
                                      "status": "not_observed", "executed": False}]})
-        self.assertEqual(lane.compare_inventories(inv, inv, 0, 0)["outcomes_compared"], 10)
+        self.assertEqual(lane.compare_inventories(inv, inv, 0, 0, PACKAGE)["outcomes_compared"], 10)
         changed = copy.deepcopy(inv)
         changed["packages"][-1]["tests"][0]["name"] = "TestOtherFixture"
-        self.assertFalse(lane.compare_inventories(inv, changed, 0, 0)["equivalent"])
+        self.assertFalse(lane.compare_inventories(inv, changed, 0, 0, PACKAGE)["equivalent"])
         for suffix in ("/other", "/testdata_not_fixture/fake"):
             invalid = copy.deepcopy(inv)
-            invalid["packages"][-1]["package"] = lane.PACKAGE + suffix
+            invalid["packages"][-1]["package"] = PACKAGE + suffix
             with self.assertRaises(ValueError):
-                lane.compare_inventories(invalid, invalid, 0, 0)
+                lane.compare_inventories(invalid, invalid, 0, 0, PACKAGE)
         invalid = copy.deepcopy(inv)
         invalid["packages"][-1]["tests"][0].update(status="pass", executed=True)
         with self.assertRaises(ValueError):
-            lane.compare_inventories(invalid, invalid, 0, 0)
+            lane.compare_inventories(invalid, invalid, 0, 0, PACKAGE)
 
     def test_identical_known_baseline_failures_are_recorded_and_equivalent(self):
         inv = self.inventory()
         inv["packages"][0]["status"] = "fail"
         inv["packages"][0]["tests"][0]["status"] = "fail"
-        self.assertTrue(lane.compare_inventories(inv, inv, 1, 1)["equivalent"])
-        self.assertFalse(lane.compare_inventories(inv, inv, 1, 0)["equivalent"])
+        self.assertTrue(lane.compare_inventories(inv, inv, 1, 1, PACKAGE)["equivalent"])
+        self.assertFalse(lane.compare_inventories(inv, inv, 1, 0, PACKAGE)["equivalent"])
 
     def test_unknown_missing_partial_and_duplicate_evidence_refuse(self):
         for change in ("missing", "empty", "unknown_package", "unknown_test", "unexecuted",
@@ -108,30 +113,47 @@ class BaselineEquivalenceTests(unittest.TestCase):
                 else:
                     package["tests"].append(copy.deepcopy(package["tests"][0]))
                 with self.assertRaises(ValueError):
-                    lane.compare_inventories(inv, inv, 0, 0)
+                    lane.compare_inventories(inv, inv, 0, 0, PACKAGE)
+
+    # Inventory package identity follows the supplied module and rejects an otherwise valid foreign inventory.
+    def test_inventory_requires_configured_module(self):
+        inv = self.inventory()
+        alternate = "example.net/alternate/internal/sessionmanager"
+        with self.assertRaisesRegex(ValueError, "inventory must contain both tested packages"):
+            lane.compare_inventories(inv, inv, 0, 0, alternate)
+        for package in inv["packages"]:
+            package["package"] = package["package"].replace(PACKAGE, alternate, 1)
+        self.assertTrue(lane.compare_inventories(inv, inv, 0, 0, alternate)["equivalent"])
+        self.assertEqual(lane.counts(inv, alternate)["discovered"], 6)
 
     def test_counts_include_skips_tags_optins_and_subtests(self):
         inv = self.inventory()
         inv["packages"][0]["tests"].append({"name": "TestRealEntry/sub", "status": "pass", "executed": True})
-        self.assertEqual(lane.counts(inv), {"discovered": 6, "dynamic_subtests": 1, "executed": 5,
+        self.assertEqual(lane.counts(inv, PACKAGE), {"discovered": 6, "dynamic_subtests": 1, "executed": 5,
                                          "skipped": 2, "failed": 0, "tagged": 2, "opt_in": 2, "not_observed": 2})
 
 
 class ProjectionEntryTests(unittest.TestCase):
     inventory = BaselineEquivalenceTests.inventory
-    def run_projection(self, root, changed=False, missing_report=False):
+    def run_projection(self, root, changed=False, missing_report=False, runner_os="Linux"):
         instance = lane.Lane.__new__(lane.Lane)
         instance.host = root / "host"
+        instance.source_module = "example.org/source-cli"
+        instance.package = PACKAGE
         instance.checkout = root / "board"
         instance.temp = root / "work"
         instance.reports = root / "reports"
         instance.tool = root / "sh1"
         instance.candidate = root / "candidate"
-        instance.summary = {"commands": [], "failures": [], "runner_os": "Linux", "board_commit": "a" * 40}
+        instance.summary = {"commands": [], "failures": [], "runner_os": runner_os, "board_commit": "a" * 40}
         for path in (instance.host, instance.checkout, instance.temp, instance.reports):
             path.mkdir()
         (instance.checkout / "internal/sessionmanager").mkdir(parents=True)
         (instance.checkout / "go.mod").write_text("module example.org/board\n")
+        if runner_os == "macOS":
+            config = instance.host / "tools/sh1/ci/mutations.json"
+            config.parent.mkdir(parents=True)
+            config.write_bytes(Path(__file__).with_name("mutations.json").read_bytes())
         calls = []
 
         def command(args, cwd=None, env=None, required=True, events=None):
@@ -167,6 +189,17 @@ class ProjectionEntryTests(unittest.TestCase):
                 self.assertNotIn("-run", lane.TEST_COMMAND)
                 self.assertNotIn("-short", lane.TEST_COMMAND)
 
+    # The macOS entry hands the Go CLI a resolved declaration tied to the configured module.
+    def test_projection_materializes_configured_mutations_before_go_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance, calls = self.run_projection(Path(directory), runner_os="macOS")
+            mutations = next(call for call in calls if len(call) > 1 and call[1] == "mutate")
+            declaration = Path(mutations[mutations.index("-mutations") + 1])
+            configured = json.loads(declaration.read_text())
+            self.assertEqual([row["package"] for row in configured["mutations"]], [PACKAGE] * 3)
+            self.assertEqual(mutations[-len(lane.TEST_COMMAND):], lane.TEST_COMMAND)
+            self.assertFalse(instance.summary["failures"])
+
     def test_missing_inventory_does_not_become_informative_guard_gap(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(FileNotFoundError):
@@ -185,6 +218,55 @@ class CommandEvidenceTests(unittest.TestCase):
                                  required=False, events=events)
             self.assertEqual(instance.summary["commands"][0]["exit"], 7)
             self.assertEqual(events.read_text(), "malformed\n")
+
+
+    # Captured arguments and raw child streams, including transformed identities, never reach public logs.
+    def test_command_logs_only_ordinal_and_exit_while_retaining_private_evidence(self):
+        for code in (0, 7):
+            for events_enabled in (False, True):
+                with self.subTest(code=code, events=events_enabled), tempfile.TemporaryDirectory() as directory:
+                    instance = lane.Lane.__new__(lane.Lane)
+                    instance.host = instance.board = instance.temp = Path(directory)
+                    instance.summary = {"commands": [], "failures": []}
+                    payload = "EXAMPLE.ORG/PRIVATE-DERIVED and example.org%2Fprivate-derived"
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    event = {"Action": "pass" if code == 0 else "fail", "Package": payload, "Test": "TestEntry"}
+                    body = json.dumps(event) + "\n" if events_enabled else payload
+                    program = "import sys; sys.stdout.write(" + repr(body) + "); sys.stderr.write(" + repr(payload) + "); sys.exit(" + str(code) + ")"
+                    events = Path(directory) / "events.jsonl" if events_enabled else None
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        result = instance.command([sys.executable, "-c", program, payload], required=False, events=events)
+                    self.assertEqual(result.returncode, code)
+                    self.assertEqual(result.stdout.decode(), body)
+                    self.assertEqual(stdout.getvalue(), "RUN command 1\nEXIT " + str(code) + "\n")
+                    self.assertEqual(stderr.getvalue(), "")
+                    self.assertEqual(instance.summary["commands"][0]["exit"], code)
+                    if events:
+                        self.assertEqual(events.read_text(), body)
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        if code:
+                            with self.assertRaisesRegex(RuntimeError, r"^command refused \(exit 7\)$"):
+                                instance.command([sys.executable, "-c", program, payload])
+                        else:
+                            self.assertEqual(instance.command([sys.executable, "-c", program, payload]).returncode, 0)
+                    self.assertNotIn(payload, stdout.getvalue() + stderr.getvalue())
+
+    # Unexpected lane errors log their class only; the in-memory report retains the original error.
+    def test_main_does_not_echo_private_exception_details(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            instance = lane.Lane.__new__(lane.Lane)
+            instance.host = instance.board = instance.temp = Path(directory)
+            instance.summary = {"failures": []}
+            payload = "example.org%2Fprivate-derived"
+            instance.prepare = lambda: (_ for _ in ()).throw(RuntimeError(payload))
+            instance.finish = lambda: None
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.object(lane, "Lane", return_value=instance), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(lane.main(), 1)
+            self.assertEqual(stderr.getvalue(), "Lane failed (RuntimeError)\n")
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(instance.summary["failures"], [{"error": payload}])
 
 
 class InventoryScopeTests(unittest.TestCase):

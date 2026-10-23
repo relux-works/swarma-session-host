@@ -46,13 +46,21 @@ Related modules: [swarma-dispatcher](https://github.com/relux-works/swarma-dispa
 The generic SH1 gate tools and invented fixture are documented in
 [`docs/sh1-gate.md`](docs/sh1-gate.md). Public CI exercises the tooling on
 GitHub-hosted macOS and Ubuntu. Lane 1 runs in public module CI with a private,
-pinned board checkout; the owner accepted board code excerpts in public CI logs
-on 2026-10-10. The current public lane 2 prototype builds and vets the consumer
+pinned source checkout. Private checkout diagnostics and lane command streams
+are suppressed; existing report artifacts still need an owner publication policy.
+The current public lane 2 prototype builds and vets the consumer
 through a file GOPROXY; the release gate requires the full private board CI
 against an immutable public module tag, without a candidate replacement. Lane 3
 tooling checks are distinct from future extracted-module conformance. The gate
 records failures and never hides skips; see the evidence and declared constraints
-in the gate document. No test or build runs on the development host.
+in the gate document. Private source tests run only on hosted runners.
+
+The Python CI helpers use `python3 host/tools/sh1/ci/checkout.py source` to resolve
+the source pin and numeric Go version, `python3 host/tools/sh1/ci/checkout.py lane`
+to fetch that pin, and `python3 host/tools/sh1/ci/run.py` to run a lane. Required
+repository secrets and environment settings are described in the gate document;
+reports go to `$RUNNER_TEMP/sh1-reports`. Run the local helper checks with
+`python3 -m unittest discover -s tools/sh1/ci -p 'test_*.py'`.
 
 Through C1 the board will consume the tagged public serving library while
 retaining the `tb-sessiond` executable and composition root. This module's
