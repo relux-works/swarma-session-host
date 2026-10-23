@@ -95,19 +95,3 @@ jobs:
           SH1_LANE: ${{ matrix.lane }}
           SH1_BOARD_COMMIT: ${{ needs.source.outputs.commit }}
         run: python3 host/tools/sh1/ci/run.py
-      - name: Upload reports only (never checkout, candidate, cache, proxy or logs)
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sh1-${{ matrix.lane }}-${{ matrix.os }}
-          path: |
-            ${{ runner.temp }}/sh1-reports/summary.json
-            ${{ runner.temp }}/sh1-reports/manifest.json
-            ${{ runner.temp }}/sh1-reports/project.json
-            ${{ runner.temp }}/sh1-reports/inventory.json
-            ${{ runner.temp }}/sh1-reports/baseline-inventory.json
-            ${{ runner.temp }}/sh1-reports/equivalence.json
-            ${{ runner.temp }}/sh1-reports/guards.json
-            ${{ runner.temp }}/sh1-reports/mutations.json
-            ${{ runner.temp }}/sh1-reports/consumer.json
-          if-no-files-found: error

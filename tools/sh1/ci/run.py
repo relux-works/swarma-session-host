@@ -1,4 +1,4 @@
-"""Hosted-only SH1 lanes. Upload only the explicitly listed JSON reports."""
+"""Hosted-only SH1 lanes. Identity-bearing reports stay local to each job."""
 import hashlib
 import json
 import os

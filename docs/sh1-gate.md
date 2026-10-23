@@ -27,9 +27,8 @@ workflow refuses missing or empty values before private checkout; the helper
 also requires its directory and module settings and resolves mutation packages
 against that module. Exact-value masking does not cover derived strings: private
 Git output and lane command streams are suppressed, and setup-go receives only
-a validated numeric Go version. The existing report artifacts retain source
-identities; log masking does not sanitize those files, so their publication
-policy needs owner review before enabling the lanes. There are no private source
+a validated numeric Go version. Log masking does not sanitize report files, so
+identity-bearing lane reports stay local to the job. There are no private source
 defaults.
 
 | Lane | Location | Input and gate |
@@ -41,13 +40,20 @@ defaults.
 Every job grants only `contents: read`. Actions are pinned by commit SHA;
 checkout credentials are not persisted. `SPM_READ_TOKEN` is supplied to private
 Git commands through a process-only authentication header; it is absent from Git arguments and persistent config.
-Private checkout diagnostics and lane command streams are not echoed. Lane
-artifacts upload only explicitly listed JSON manifests,
-inventories, projection/guard/mutation/consumer reports and timing summaries.
-They never upload board checkouts, candidate bytes, dependency caches, proxy
-archives or raw logs. Existing tooling artifacts contain the invented fixture
-only. Hosted lanes run on GitHub; local helper tests validate configuration,
-checkout and logging behavior without running private source tests.
+Private checkout diagnostics and lane command streams are not echoed. Hosted
+lanes run on GitHub; local helper tests validate configuration, checkout and
+logging behavior without running private source tests.
+
+Projection and consumer lanes no longer publish `summary.json`, `manifest.json`,
+`project.json`, `inventory.json`, `baseline-inventory.json`, `equivalence.json`,
+`guards.json`, `mutations.json` or `consumer.json`: these reports can contain
+private source identities, paths, diagnostic reasons and command arguments.
+They remain in `$RUNNER_TEMP/sh1-reports` inside that job for its lifetime and
+are discarded with the runner; they are not copied into logs or job summaries.
+The step conclusion and recorded exits still determine the same gate result.
+The public tooling artifact remains limited to invented-fixture evidence.
+Historical artifact references below describe the earlier publication policy;
+a reviewed public-safe report schema and redaction tests are separate work.
 
 ## Commands
 

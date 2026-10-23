@@ -47,7 +47,8 @@ The generic SH1 gate tools and invented fixture are documented in
 [`docs/sh1-gate.md`](docs/sh1-gate.md). Public CI exercises the tooling on
 GitHub-hosted macOS and Ubuntu. Lane 1 runs in public module CI with a private,
 pinned source checkout. Private checkout diagnostics and lane command streams
-are suppressed; existing report artifacts still need an owner publication policy.
+are suppressed; identity-bearing lane reports remain local to each job and are
+not published as artifacts. Public tooling artifacts use invented fixtures only.
 The current public lane 2 prototype builds and vets the consumer
 through a file GOPROXY; the release gate requires the full private board CI
 against an immutable public module tag, without a candidate replacement. Lane 3
@@ -59,7 +60,8 @@ The Python CI helpers use `python3 host/tools/sh1/ci/checkout.py source` to reso
 the source pin and numeric Go version, `python3 host/tools/sh1/ci/checkout.py lane`
 to fetch that pin, and `python3 host/tools/sh1/ci/run.py` to run a lane. Required
 repository secrets and environment settings are described in the gate document;
-reports go to `$RUNNER_TEMP/sh1-reports`. Run the local helper checks with
+reports stay in `$RUNNER_TEMP/sh1-reports` for the job lifetime. Run the local
+helper checks with
 `python3 -m unittest discover -s tools/sh1/ci -p 'test_*.py'`.
 
 Through C1 the board will consume the tagged public serving library while
