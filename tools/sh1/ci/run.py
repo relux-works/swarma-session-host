@@ -175,30 +175,25 @@ class Lane:
     def command(self, args, cwd=None, env=None, required=True, events=None):
         args = [str(a) for a in args]
         started = time.monotonic()
-        print("RUN", self.safe(" ".join(args)), flush=True)
+        print("RUN command", len(self.summary["commands"]) + 1, flush=True)
         result = subprocess.run(args, cwd=cwd or self.host, env=env, capture_output=True)
-        # Raw output can contain board code; it stays in job logs, never artifacts.
+        # Raw output and arguments can reveal derived private identities; never echo them.
         out = result.stdout.decode(errors="replace")
-        err = result.stderr.decode(errors="replace")
         row = {"command": [self.safe(a) for a in args], "exit": result.returncode,
                "duration_seconds": round(time.monotonic() - started, 3)}
         self.summary["commands"].append(row)
         print("EXIT", result.returncode, flush=True)
         if events:
             events.write_bytes(result.stdout)
-            print(self.safe(out), end="")
             failures = []
             for line in out.splitlines():
                 ev = json.loads(line)
                 if ev.get("Action") in ("fail", "skip"):
                     failures.append({k: ev[k] for k in ("Action", "Package", "Test") if k in ev})
             self.summary.setdefault("test_terminals", {})[events.stem] = failures
-        else:
-            print(self.safe(out), end="")
-        print(self.safe(err), end="", file=sys.stderr)
         if result.returncode and required:
             self.summary["failures"].append(row)
-            raise RuntimeError("command refused: " + " ".join(row["command"]))
+            raise RuntimeError("command refused (exit " + str(result.returncode) + ")")
         return result
 
     def safe(self, text):
@@ -359,7 +354,7 @@ def main():
             raise RuntimeError("unknown lane")
     except Exception as error:
         lane.summary["failures"].append({"error": lane.safe(str(error))})
-        print(lane.safe(str(error)), file=sys.stderr)
+        print("Lane failed (" + type(error).__name__ + ")", file=sys.stderr)
     finally:
         lane.finish()
     return 1 if lane.summary["failures"] else 0

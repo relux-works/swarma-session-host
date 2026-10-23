@@ -127,8 +127,12 @@ class WorkflowConfigurationTests(unittest.TestCase):
                     for supplied in environment.values():
                         if supplied.strip():
                             self.assertNotIn(supplied, result.stdout + result.stderr)
-        self.assertEqual(text.count("repository: ${{ vars.PRIVATE_SOURCE_REPO }}"), 2)
-        self.assertIn("sparse-checkout: ${{ vars.PRIVATE_SOURCE_CLI_DIR }}/go.mod", text)
-        self.assertIn("go-version-file: board/${{ vars.PRIVATE_SOURCE_CLI_DIR }}/go.mod", text)
-        for name in SOURCE:
-            self.assertIn(name + ": ${{ vars." + name + " }}", text)
+        self.assertNotIn("vars.PRIVATE_SOURCE_", text)
+        self.assertNotIn("go-version-file:", text)
+        self.assertIn("go-version: ${{ needs.source.outputs.go_version }}", text)
+        self.assertEqual(text.count("run: python3 host/tools/sh1/ci/checkout.py"), 2)
+        for name in WORKFLOW_SOURCE:
+            self.assertIn(name + ": ${{ secrets." + name + " }}", text)
+        for line in text.splitlines():
+            if line.lstrip().startswith("if:"):
+                self.assertNotIn("secrets.", line)

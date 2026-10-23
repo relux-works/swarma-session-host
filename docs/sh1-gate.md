@@ -20,12 +20,17 @@ The owner decision of 2026-10-10 supersedes the original private workflow plan.
 that ref once; all three matrix jobs check out the same exact board commit.
 No pull-request event can access the board token through this workflow.
 
-An administrator must set the repository variables `PRIVATE_SOURCE_REPO`,
-`PRIVATE_SOURCE_CLI_DIR` and `PRIVATE_SOURCE_MODULE` in the repository settings
-before this workflow change lands. The workflow refuses missing or empty values
-before checkout; the helper also requires its directory and module settings, and
-resolves relative mutation packages against that module. There are no private
-source defaults.
+An administrator must set the repository secrets `PRIVATE_SOURCE_REPO`,
+`PRIVATE_SOURCE_CLI_DIR` and `PRIVATE_SOURCE_MODULE` at Settings > Secrets and
+variables > Actions > New repository secret before this change lands. The
+workflow refuses missing or empty values before private checkout; the helper
+also requires its directory and module settings and resolves mutation packages
+against that module. Exact-value masking does not cover derived strings: private
+Git output and lane command streams are suppressed, and setup-go receives only
+a validated numeric Go version. The existing report artifacts retain source
+identities; log masking does not sanitize those files, so their publication
+policy needs owner review before enabling the lanes. There are no private source
+defaults.
 
 | Lane | Location | Input and gate |
 | --- | --- | --- |
@@ -34,13 +39,15 @@ source defaults.
 | 3: tooling | GitHub-hosted macOS and Ubuntu | Generic tool vet, race tests, build and fixture; this does not establish extracted-module conformance. |
 
 Every job grants only `contents: read`. Actions are pinned by commit SHA;
-checkout credentials are not persisted. `SPM_READ_TOKEN` is used only as the
-`token:` argument of a board checkout. The owner permits board code excerpts in
-public job logs. Lane artifacts upload only explicitly listed JSON manifests,
+checkout credentials are not persisted. `SPM_READ_TOKEN` is supplied to private
+Git commands through a process-only authentication header; it is absent from Git arguments and persistent config.
+Private checkout diagnostics and lane command streams are not echoed. Lane
+artifacts upload only explicitly listed JSON manifests,
 inventories, projection/guard/mutation/consumer reports and timing summaries.
 They never upload board checkouts, candidate bytes, dependency caches, proxy
 archives or raw logs. Existing tooling artifacts contain the invented fixture
-only. All tests, builds and vet run on GitHub; none run on the development host.
+only. Hosted lanes run on GitHub; local helper tests validate configuration,
+checkout and logging behavior without running private source tests.
 
 ## Commands
 
@@ -171,8 +178,9 @@ source guard. Later gates declare converter and additional real guard mutations 
 Caller commands must emit Go test JSON on stdout; diagnostics belong on stderr.
 The CLI forwards every baseline and mutant stream to stdout, including refused
 baselines, and labels each stage and its actual exit on stderr. This stream is
-retained in public job logs, excluded from artifacts; it is not one inventory
-stream because each stage repeats executions.
+captured without being echoed by the hosted lane helper and excluded from
+artifacts; it is not one inventory stream because each stage repeats executions.
+Historical runs below used the earlier public-log policy.
 
 ### consumer
 

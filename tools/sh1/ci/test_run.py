@@ -1,4 +1,6 @@
 import copy
+import contextlib
+import io
 import json
 import importlib.util
 from pathlib import Path
@@ -216,6 +218,55 @@ class CommandEvidenceTests(unittest.TestCase):
                                  required=False, events=events)
             self.assertEqual(instance.summary["commands"][0]["exit"], 7)
             self.assertEqual(events.read_text(), "malformed\n")
+
+
+    # Captured arguments and raw child streams, including transformed identities, never reach public logs.
+    def test_command_logs_only_ordinal_and_exit_while_retaining_private_evidence(self):
+        for code in (0, 7):
+            for events_enabled in (False, True):
+                with self.subTest(code=code, events=events_enabled), tempfile.TemporaryDirectory() as directory:
+                    instance = lane.Lane.__new__(lane.Lane)
+                    instance.host = instance.board = instance.temp = Path(directory)
+                    instance.summary = {"commands": [], "failures": []}
+                    payload = "EXAMPLE.ORG/PRIVATE-DERIVED and example.org%2Fprivate-derived"
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    event = {"Action": "pass" if code == 0 else "fail", "Package": payload, "Test": "TestEntry"}
+                    body = json.dumps(event) + "\n" if events_enabled else payload
+                    program = "import sys; sys.stdout.write(" + repr(body) + "); sys.stderr.write(" + repr(payload) + "); sys.exit(" + str(code) + ")"
+                    events = Path(directory) / "events.jsonl" if events_enabled else None
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        result = instance.command([sys.executable, "-c", program, payload], required=False, events=events)
+                    self.assertEqual(result.returncode, code)
+                    self.assertEqual(result.stdout.decode(), body)
+                    self.assertEqual(stdout.getvalue(), "RUN command 1\nEXIT " + str(code) + "\n")
+                    self.assertEqual(stderr.getvalue(), "")
+                    self.assertEqual(instance.summary["commands"][0]["exit"], code)
+                    if events:
+                        self.assertEqual(events.read_text(), body)
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        if code:
+                            with self.assertRaisesRegex(RuntimeError, r"^command refused \(exit 7\)$"):
+                                instance.command([sys.executable, "-c", program, payload])
+                        else:
+                            self.assertEqual(instance.command([sys.executable, "-c", program, payload]).returncode, 0)
+                    self.assertNotIn(payload, stdout.getvalue() + stderr.getvalue())
+
+    # Unexpected lane errors log their class only; the in-memory report retains the original error.
+    def test_main_does_not_echo_private_exception_details(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            instance = lane.Lane.__new__(lane.Lane)
+            instance.host = instance.board = instance.temp = Path(directory)
+            instance.summary = {"failures": []}
+            payload = "example.org%2Fprivate-derived"
+            instance.prepare = lambda: (_ for _ in ()).throw(RuntimeError(payload))
+            instance.finish = lambda: None
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.object(lane, "Lane", return_value=instance), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(lane.main(), 1)
+            self.assertEqual(stderr.getvalue(), "Lane failed (RuntimeError)\n")
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(instance.summary["failures"], [{"error": payload}])
 
 
 class InventoryScopeTests(unittest.TestCase):
