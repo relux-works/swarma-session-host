@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -429,4 +430,42 @@ func TestGenerateIdentityAndModuleRefusals(t *testing.T) {
 	args = generateArgs(src, filepath.Join(t.TempDir(), "out"), mod)
 	args[4] = "../session"
 	reject(t, args...)
+}
+
+// Explicit source imports generate a candidate; missing or empty imports refuse before output writes.
+func TestGenerateRequiresExplicitSourceImport(t *testing.T) {
+	src := fixture(t)
+	mod := filepath.Join(t.TempDir(), "go.mod")
+	save(t, mod, []byte("module example.org/sh1-host\n\ngo 1.25.5\n"))
+	for _, missing := range []bool{true, false} {
+		out := filepath.Join(t.TempDir(), "candidate")
+		args := generateArgs(src, out, mod)
+		for i, arg := range args {
+			if arg == "-old" {
+				if missing {
+					args = append(args[:i], args[i+2:]...)
+				} else {
+					args[i+1] = ""
+				}
+				break
+			}
+		}
+		output, e := exec.Command(tool, args...).CombinedOutput()
+		exit, ok := e.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 1 || !strings.Contains(string(output), "all command flags are required") {
+			t.Fatalf("missing source import: error %v, output %s", e, output)
+		}
+		if _, e := os.Stat(out); !os.IsNotExist(e) {
+			t.Fatalf("refused generation wrote candidate: %v", e)
+		}
+	}
+	out := filepath.Join(t.TempDir(), "candidate")
+	call(t, generateArgs(src, out, mod)...)
+	var manifest Manifest
+	if e := readJSON(filepath.Join(out, manifestName), &manifest); e != nil {
+		t.Fatal(e)
+	}
+	if manifest.Old != "example.org/sh1-fixture/internal/session" {
+		t.Fatalf("source identity not retained: %s", manifest.Old)
+	}
 }

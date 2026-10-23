@@ -20,6 +20,13 @@ The owner decision of 2026-10-10 supersedes the original private workflow plan.
 that ref once; all three matrix jobs check out the same exact board commit.
 No pull-request event can access the board token through this workflow.
 
+An administrator must set the repository variables `PRIVATE_SOURCE_REPO`,
+`PRIVATE_SOURCE_CLI_DIR` and `PRIVATE_SOURCE_MODULE` in the repository settings
+before this workflow change lands. The workflow refuses missing or empty values
+before checkout; the helper also requires its directory and module settings, and
+resolves relative mutation packages against that module. There are no private
+source defaults.
+
 | Lane | Location | Input and gate |
 | --- | --- | --- |
 | 1: projection | GitHub-hosted macOS and Ubuntu | Same-runner baseline and projection of unchanged root and `musepty` tests, uncached and unmasked; exact outcome equivalence gates macOS, Ubuntu is informative; inventories, guard ratios and macOS named-test mutations. |
