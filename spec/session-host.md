@@ -17,7 +17,7 @@
 
 ## 1. What the host is
 
-The session host keeps agent sessions alive in the background: it starts a harness in a given directory, lets a person attach and detach, delivers messages into a session, and reports events. A goal is optional. The module MUST work without goals, a board, an orchestrator or their toolchain. Task-board is an OPTIONAL client of a generic goal interface (§3.8). Today this is `tb-sessiond`, the session manager inside task-board (`tools/board-cli/internal/sessionmanager` in relux-works/skill-project-management).
+The session host keeps agent sessions alive in the background: it starts a harness in a given directory, lets a person attach and detach, delivers messages into a session, and reports events. A goal is optional. The module MUST work without goals, a board, an orchestrator or their toolchain. Task-board is an OPTIONAL client of a generic goal interface (§3.8). Today this is the board's in-tree session package (private source).
 
 | Phase | Service and logical ownership | Process ownership |
 |---|---|---|
@@ -35,7 +35,7 @@ it does not define new internal APIs.
 
 - One control plane per board, keyed by `BoardKey`; state in the user state directory; self-restoring start-up; one daemon per board.
 - The daemon registers Claude (a PTY the daemon owns), Codex (a private app-server per session) and Muse PTY provider factories. Codex goals are delivered as text directives; its native goals are disabled.
-- At skill-project-management `077e000e6`, `musepty.NewMusePTYHostFactory` is registered in production (`cmd/tb-sessiond/main.go:142` and `boardless.go:35`); only the MSP `MuseHostFactory` is unregistered. The hosted launch route decodes its input and always refuses capability admission.
+- At the pinned private source commit, `musepty.NewMusePTYHostFactory` is registered in both production compositions; only the MSP `MuseHostFactory` is unregistered. The hosted launch route decodes its input and always refuses capability admission. The exact source pin is retained in the private fork's provenance record.
 - Goals are applied inside the board's write transaction; Claude acknowledges the exact rendered revision; deferred application has an acknowledgement waiter.
 - Notices: a durable inbox per session, written directly by board producers, delivered only while a client is attached.
 - A Claude session dies when the daemon is replaced (the daemon holds the PTY master).
@@ -106,7 +106,7 @@ The hosted prototype, its measured scope and its failures are recorded in [`docs
 
 ### 2.5 Order of work
 
-Confirm the graph and composition choice (§2.2). The approved order cuts the session package's dependencies on `pkg/board` and `pkg/remoteconfig` inside a private working fork before copying the snapshot here. The public module MUST never carry a private import and MUST build standalone from its first landing. This replaces the previous copy-first order and F's earlier timing in §2.4; the three-lane proof applies at Z/C1. **O** is S1b; **G/X/Y**'s seam, dependency and package work follows S1a, S2a and S2b below.
+Confirm the graph and composition choice (§2.2). The approved order cuts the session package's dependencies on the board and remote-configuration libraries inside a private working fork before copying the snapshot here. The public module MUST never carry a private import and MUST build standalone from its first landing. This replaces the previous copy-first order and F's earlier timing in §2.4; the three-lane proof applies at Z/C1. **O** is S1b; **G/X/Y**'s seam, dependency and package work follows S1a, S2a and S2b below.
 
 1. **S0**: baseline goldens. For **F**'s proof, record the board commit, host tree, projection generator, helper, test and fixture hashes, module graph and environment; F stays provisional until the copy snapshot closes.
 2. **S0b**: plugin-wire, hosted-route and registration goldens.

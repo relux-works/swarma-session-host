@@ -23,7 +23,7 @@ No pull-request event can access the board token through this workflow.
 | Lane | Location | Input and gate |
 | --- | --- | --- |
 | 1: projection | GitHub-hosted macOS and Ubuntu | Same-runner baseline and projection of unchanged root and `musepty` tests, uncached and unmasked; exact outcome equivalence gates macOS, Ubuntu is informative; inventories, guard ratios and macOS named-test mutations. |
-| 2: consumer | GitHub-hosted Ubuntu | Candidate through the file GOPROXY, no candidate replace; `go build ./...` and `go vet ./...` for `tools/board-cli`. |
+| 2: consumer | GitHub-hosted Ubuntu | Candidate through the file GOPROXY, no candidate replace; `go build ./...` and `go vet ./...` for the board's CLI module (private source). |
 | 3: tooling | GitHub-hosted macOS and Ubuntu | Generic tool vet, race tests, build and fixture; this does not establish extracted-module conformance. |
 
 Every job grants only `contents: read`. Actions are pinned by commit SHA;
@@ -223,7 +223,7 @@ three lanes run on those pinned bytes.
 ## Hosted lane contract
 
 The helper `tools/sh1/ci/run.py` builds the generic CLI on the runner and derives
-its Go toolchain from the board's `tools/board-cli/go.mod`. The reviewed prototype
+its Go toolchain from the board's CLI module definition (private source). The reviewed prototype
 candidate retains that module's requirements, changes its module path to
 `github.com/relux-works/swarma-session-host`, and removes its two unrelated local
 board-library replacements. The empty version-1 projection adapter table is
@@ -282,14 +282,14 @@ commit before making 10/10 guard reads gating. The exact nine file names are
 listed in the historical evidence below and in the generated guard report.
 
 Lane 2 mirrors the board's downloaded public dependencies into the file proxy
-and publishes the retained `pkg/board` and `pkg/remoteconfig` libraries from the
+and publishes the retained board and remote-configuration libraries from the
 same board commit at their already required `v0.0.0` versions. These are explicit
 prototype dependencies, with publication hashes recorded; they are neither
 neutral interfaces nor independently released libraries. The candidate has no
 replace. The consumer retains the board's two original unrelated replacements.
 The extracted package is removed from the disposable consumer, so tests needing
 board-internal access remain covered by lane 1. Those tests import the board's
-`internal/store`, `internal/remote`, `internal/testsupport` and tagged-test helpers;
+storage, remote-access and test-support packages, plus tagged-test helpers;
 standalone extracted-module test conformance is not established here. A proposed
 future adapter is a reviewed board-owned test-support bridge after the source
 freeze; the current projection continues to run the original private paths with
@@ -313,7 +313,7 @@ This worker triggered and collected fresh [lane run 38033458412](https://github.
 and [tooling run 38033458450](https://github.com/relux-works/swarma-session-host/actions/runs/38033458450).
 They use signed public snapshot `c078a21482724d7cb3b264c7449a26846f864b0a`
 (tree `2f24cfe144d074a44a491565114b3b1d40c0564f`), with board main resolved once to
-`19bfb961e65c2d63fcb7a06f4bad054432519c4c`. The Story working tree remains
+the pinned private source commit recorded in the private fork's provenance record. The Story working tree remains
 uncommitted. All 29 validation input files match the tested snapshot byte-for-byte;
 only this evidence documentation changes after execution. Historical strict-policy
 runs below are inherited evidence, not baseline-equivalence proof. This is the
@@ -334,8 +334,8 @@ current-main development gate; the Muse-cut freeze remains a separate task.
 
 The manifest has 290 files including the supplied module file, with 195 protected
 package files. The projection report binds 94 production files and 1,366 protected
-files across board-cli to the pinned board commit. Every before/after hash is
-equal. Recursive inventory retains nine unselected `testdata/fake_msp_server`
+files across the board's CLI module to the pinned private source commit. Every before/after hash is
+equal. Recursive inventory retains nine unselected MSP fake-server fixture
 declarations outside the unchanged two-package command; these remain compared
 as unobserved. Both package commands use Go 1.25.5 from board go.mod, GOTOOLCHAIN
 local, GOWORK off and no name masks. Ubuntu is linux/amd64; macOS is darwin/arm64.
@@ -456,12 +456,13 @@ and inventories remain attached, not reclassified as passing evidence.
 
 ## Historical lane 1 and 2 evidence (superseded admission policy)
 
-Hosted verification uses board main at `f074339026d7bd410d753f8059c19e99404e4794`. The tested public
+Hosted verification uses the pinned private source commit of board main, recorded
+in the private fork's provenance record. The tested public
 snapshot is `569e0087de83d45a344a59c6446eeff602a20512` (tree `415ef2531002a3fae6be3222822ea30a3a92a814`); subsequent worktree changes
 only add evidence documentation. The generator and candidate bytes are equal
 across all three snapshots. The manifest has 290 files including the supplied
 module file, with 195 protected package files. Projection compares 94 production
-files and 1,355 protected files across board-cli: every before/after hash is equal.
+files and 1,355 protected files across the board's CLI module: every before/after hash is equal.
 
 | Identity | SHA-256 |
 | --- | --- |

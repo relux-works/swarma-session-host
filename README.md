@@ -1,6 +1,6 @@
 # swarma-session-host
 
-The session host keeps agent sessions running in the background: it starts a harness (Claude Code, Codex, Muse) in a given directory, lets a person attach and detach, delivers messages into a running session, and reports what happens. A goal is optional. The module must work without goals, a board, an orchestrator or their toolchain; task-board is an optional client of its generic goal interface. Today this job is done by the session manager inside task-board (`tb-sessiond`). This repository is where it becomes its own module.
+The session host keeps agent sessions running in the background: it starts a harness (Claude Code, Codex, Muse) in a given directory, lets a person attach and detach, delivers messages into a running session, and reports what happens. A goal is optional. The module must work without goals, a board, an orchestrator or their toolchain; task-board is an optional client of its generic goal interface. Today this job is done by the board's in-tree session package (private source). This repository is where it becomes its own module.
 
 **Revision:** accepted architecture-review findings (2026-10-13): complete signed-intent retry binding, retained producer/aggregate storage accounting with protected control reserve, positive placement/role eligibility and inert exact-candidate review. Optional reviewer policies remain unchosen and off; publication and qualification remain gates (§§3.1–3.5, 3.7; §7.19–22).
 
@@ -83,7 +83,7 @@ capability. Each links back to its defining specification sections.
 
 ## Provenance
 
-Code will move here as a snapshot of task-board's `tools/board-cli/internal/sessionmanager` at a pinned commit of relux-works/skill-project-management (Apache-2.0), without that repository's history. Each move will record the source commit. The NOTICE will keep the original attribution.
+Code will move here as a snapshot of the board's in-tree session package (private source) at a pinned private source commit (Apache-2.0), without the source repository's history. Each move will record its exact source pin in the private fork's provenance record. The NOTICE will keep the original attribution.
 
 ## License
 
