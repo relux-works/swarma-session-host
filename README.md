@@ -81,6 +81,18 @@ PlantUML sources and defining spec sections:
 The figures mark unpublished schemas explicitly and establish no runtime
 capability. Each links back to its defining specification sections.
 
+## Muse build management (`musebuilds/`)
+
+The `musebuilds` package discovers installed Muse builds, selects the newest
+one, and owns host admission, freeze publication, first probe and durable
+last-good state. Its `minilock` and `probeprocess` subpackages provide the
+build lock and the owned probe-process launcher. It supports Linux and macOS;
+other platforms refuse before I/O. Build and test it with:
+
+```bash
+go test ./musebuilds/...
+```
+
 ## Provenance
 
 Code will move here as a snapshot of the board's in-tree session package (private source) at a pinned private source commit (Apache-2.0), without the source repository's history. Each move will record its exact source pin in the private fork's provenance record. The NOTICE will keep the original attribution.
