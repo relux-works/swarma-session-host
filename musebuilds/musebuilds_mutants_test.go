@@ -44,12 +44,12 @@ func TestMuseBuildsNarrowingMutants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	moduleRoot := filepath.Clean(filepath.Join(working, "..", ".."))
-	packagePath := "./internal/musebuilds"
-	minilockPath := "./internal/musebuilds/minilock"
-	probeprocessPath := "./internal/musebuilds/probeprocess"
+	moduleRoot := filepath.Clean(filepath.Join(working, ".."))
+	packagePath := "./musebuilds"
+	minilockPath := "./musebuilds/minilock"
+	probeprocessPath := "./musebuilds/probeprocess"
 	production := func(name string) string {
-		return filepath.Join(moduleRoot, "internal", "musebuilds", name)
+		return filepath.Join(moduleRoot, "musebuilds", name)
 	}
 	// pkg names the test package for the row; empty means the parent
 	// musebuilds package. Lock-timing rows run in minilock, where

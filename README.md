@@ -93,6 +93,14 @@ other platforms refuse before I/O. Build and test it with:
 go test ./musebuilds/...
 ```
 
+The narrowing-mutant suite in this package is explicit opt-in and is not
+run by the default test command. To run it manually, with the Go toolchain
+for this module on `PATH`, execute:
+
+```bash
+TASK_BOARD_MUSE_RUN_MUTANTS=1 go test -tags mutants -run '^TestMuseBuildsNarrowingMutants$' ./musebuilds/ -count=1
+```
+
 ## Provenance
 
 Code will move here as a snapshot of the board's in-tree session package (private source) at a pinned private source commit (Apache-2.0), without the source repository's history. Each move will record its exact source pin in the private fork's provenance record. The NOTICE will keep the original attribution.
