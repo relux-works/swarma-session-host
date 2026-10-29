@@ -155,6 +155,19 @@ func TestFixtureChild(t *testing.T) {
 	case "eof-live":
 		os.Stdout.Close()
 		io.Copy(io.Discard, os.Stdin)
+		if os.WriteFile("stdin-eof-observed", nil, 0600) != nil {
+			os.Exit(12)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat("release-eof-child"); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				os.Exit(13)
+			}
+			time.Sleep(time.Millisecond)
+		}
 		os.Exit(0)
 	case "flood":
 		os.Stdout.Write(bytes.Repeat([]byte("x"), MaxOutput+4096))
@@ -370,8 +383,10 @@ func TestStartRefusalsPreserveOriginal(t *testing.T) {
 }
 
 // Output closure is independently observable while the child still owns live
-// stdin. Reads wake at the empty ended tail; new writes have no reserved effect.
-// The ordinary echo child supplies a valid output/write control.
+// stdin. An explicit exit barrier keeps it alive after it acknowledges stdin
+// EOF. Reads wake at the empty ended tail; new writes have no reserved effect.
+// The ordinary echo child supplies a valid output/write control. Cleanup always
+// releases the barrier; the child also has a bounded failure exit.
 func TestOutputEndClosesWritesBeforeProcessExit(t *testing.T) {
 	for _, ended := range []bool{false, true} {
 		t.Run(fmt.Sprint(ended), func(t *testing.T) {
@@ -384,7 +399,19 @@ func TestOutputEndClosesWritesBeforeProcessExit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { s.Close() })
+			release := func() {
+				if ended {
+					if err := os.WriteFile(filepath.Join(cfg.Plan.Cwd, "release-eof-child"), nil, 0600); err != nil {
+						t.Error(err)
+					}
+				}
+			}
+			t.Cleanup(func() {
+				release()
+				if err := s.Close(); err != nil {
+					t.Error(err)
+				}
+			})
 			client := testClient(t, cfg)
 			call(t, client, Request{Op: "claim", Execution: cfg.Execution, Epoch: 1}, "ok")
 			if ended {
@@ -399,6 +426,17 @@ func TestOutputEndClosesWritesBeforeProcessExit(t *testing.T) {
 					}
 					if time.Now().After(deadline) {
 						t.Fatal("output end not observable")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				// The child has consumed the cancellation EOF and is still
+				// behind our exit barrier, rather than merely not yet reaped.
+				for {
+					if _, err := os.Stat(filepath.Join(cfg.Plan.Cwd, "stdin-eof-observed")); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("child did not acknowledge stdin EOF")
 					}
 					time.Sleep(time.Millisecond)
 				}
@@ -420,6 +458,7 @@ func TestOutputEndClosesWritesBeforeProcessExit(t *testing.T) {
 					t.Fatal("live output control failed")
 				}
 			}
+			release()
 			call(t, client, Request{Op: "stop", Execution: cfg.Execution, Epoch: 1}, "stopped")
 		})
 	}
