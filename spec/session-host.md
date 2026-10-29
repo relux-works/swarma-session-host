@@ -1,5 +1,13 @@
 # swarma-session-host: specification
 
+> **Superseded design input (2026-10-29).** The extraction sequence below is
+> historical and is not the implementation plan. Current development starts with
+> a fresh, macOS-first host/runner fixture prototype, with no board-daemon code
+> reuse. The active scope and limits are in [M1](../docs/prototype-m1.md); real
+> launcher/model-configuration integration remains gated by its owners' jointly
+> accepted contracts. Historical platform descriptions below claim no current
+> implementation, activated security boundary or prototype acceptance evidence.
+
 - **Status:** draft r14 (2026-10-22; approved SH1 cut-first order). The session-manager package has not moved; hosted gate tooling is a separate prototype.
 - **Revision:** r14 records the approved SH1 cut-first order and interim fork acceptance gate (2026-10-22). It corrects the production Muse PTY registration fact; the MSP factory remains unregistered.
 - **Revision:** r13 applies accepted architecture-review findings (2026-10-13): complete signed-intent replay binding, retained producer/aggregate storage debt and protected control/evidence reserve, positive placement/role eligibility and inert exact-candidate review before qualified tree entry. Optional reviewer policies stay unchosen and off; formats and qualification remain activation gates. No implementation, qualification or activation is claimed.

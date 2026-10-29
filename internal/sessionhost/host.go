@@ -1,0 +1,386 @@
+// Package sessionhost implements the fixture host without harness-specific types.
+package sessionhost
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"regexp"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/relux-works/swarma-session-host/internal/runner"
+)
+
+const MaxRecords = 32
+
+var scalar = regexp.MustCompile(`^[A-Za-z0-9._:/@+\-]{1,128}$`)
+
+// Selection is opaque data, not a model catalog or launch admission decision.
+type Selection struct {
+	Vendor    string `json:"vendor"`
+	Model     string `json:"model"`
+	Reasoning string `json:"reasoning"`
+}
+
+// Notice contains a reference, never mailbox content or an arbitrary prompt.
+type Notice struct {
+	ID        string `json:"id"`
+	Reference string `json:"reference"`
+}
+
+type Adapter interface {
+	Name() string
+	Encode(Notice, Selection) ([]byte, error)
+	// Applied inspects the bounded complete output prefix. Missing evidence is
+	// false; malformed evidence is an error, not permission to retry delivery.
+	Applied([]byte, Notice, Selection) (bool, error)
+}
+
+type Record struct {
+	Notice   Notice `json:"notice"`
+	Digest   string `json:"digest"`
+	Sequence uint64 `json:"sequence"`
+	State    string `json:"state"`
+}
+
+type State struct {
+	Version        int       `json:"version"`
+	Execution      string    `json:"execution"`
+	RunnerInstance string    `json:"runner_instance"`
+	Adapter        string    `json:"adapter"`
+	Selection      Selection `json:"selection"`
+	Epoch          uint64    `json:"epoch"`
+	Sequence       uint64    `json:"sequence"`
+	Fence          string    `json:"fence"`
+	Records        []Record  `json:"records"`
+	StopRequested  bool      `json:"stop_requested"`
+}
+
+type Config struct {
+	StateDir  string
+	Socket    string
+	Execution string
+	Selection Selection
+	Adapter   Adapter
+	IOTimeout time.Duration
+}
+
+type Host struct {
+	cfg       Config
+	store     *store
+	client    *runner.Client
+	mu        sync.Mutex
+	state     State
+	err       error
+	ctx       context.Context
+	cancel    context.CancelFunc
+	kick      chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
+}
+
+func validNotice(n Notice) bool { return scalar.MatchString(n.ID) && scalar.MatchString(n.Reference) }
+
+func validSelection(s Selection) bool {
+	return scalar.MatchString(s.Vendor) && scalar.MatchString(s.Model) && scalar.MatchString(s.Reasoning)
+}
+
+func digestNotice(n Notice, s Selection) string {
+	data, _ := json.Marshal(struct {
+		Notice    Notice
+		Selection Selection
+	}{n, s})
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
+}
+
+func Open(cfg Config) (*Host, error) {
+	if cfg.Adapter == nil || !scalar.MatchString(cfg.Adapter.Name()) || !scalar.MatchString(cfg.Execution) || !validSelection(cfg.Selection) || cfg.IOTimeout <= 0 || cfg.IOTimeout > time.Minute {
+		return nil, errors.New("invalid_host_config")
+	}
+	store, err := openStore(cfg.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	state, exists, err := store.read()
+	if err != nil {
+		store.close()
+		return nil, err
+	}
+	if exists && (state.Execution != cfg.Execution || state.Adapter != cfg.Adapter.Name() || state.Selection != cfg.Selection) {
+		store.close()
+		return nil, errors.New("stored_plan_conflict")
+	}
+	if !exists {
+		state = State{Version: 1, Execution: cfg.Execution, Adapter: cfg.Adapter.Name(), Selection: cfg.Selection, Fence: "held"}
+	}
+	state.Epoch++
+	if state.Epoch == 0 {
+		store.close()
+		return nil, errors.New("epoch_exhausted")
+	}
+	// Preserve required intent with delivery closed before any runner contact.
+	priorFence := state.Fence
+	if state.Fence != "unknown" {
+		state.Fence = "held"
+	}
+	if err := store.write(state); err != nil {
+		store.close()
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.IOTimeout)
+	defer cancel()
+	client, err := runner.Dial(ctx, cfg.Socket)
+	if err != nil {
+		store.close()
+		return nil, errors.New("runner_unavailable")
+	}
+	claim, err := client.Call(ctx, runner.Request{Op: "claim", Execution: cfg.Execution, Epoch: state.Epoch})
+	if err != nil || claim.Code != "ok" || len(claim.Instance) != 32 || claim.PID <= 0 || claim.Epoch != state.Epoch || (exists && state.RunnerInstance != "" && state.RunnerInstance != claim.Instance) {
+		client.Close()
+		store.close()
+		return nil, errors.New("runner_claim_refused")
+	}
+	state.RunnerInstance = claim.Instance
+	state.Fence = "open"
+	if priorFence == "unknown" || (exists && priorFence == "held") {
+		state.Fence = priorFence
+	}
+	for _, record := range state.Records {
+		if record.State == "unknown" {
+			state.Fence = "unknown"
+		}
+	}
+	if claim.Exited || claim.Overflow {
+		state.Fence = "unknown"
+	}
+	if state.StopRequested {
+		state.Fence = "held"
+	}
+	if err := store.write(state); err != nil {
+		client.Close()
+		store.close()
+		return nil, err
+	}
+	workCtx, workCancel := context.WithCancel(context.Background())
+	h := &Host{cfg: cfg, store: store, client: client, state: state, ctx: workCtx, cancel: workCancel, kick: make(chan struct{}, 1)}
+	h.wg.Add(1)
+	go h.dispatch()
+	h.wake()
+	return h, nil
+}
+
+func (h *Host) persistLocked(next State) error {
+	if h.ctx.Err() != nil {
+		return errors.New("host_unavailable")
+	}
+	if h.err != nil {
+		return errors.New("host_storage_unavailable")
+	}
+	if err := h.store.write(next); err != nil {
+		h.err = err
+		h.state.Fence = "unknown"
+		return errors.New("host_storage_unavailable")
+	}
+	h.state = next
+	return nil
+}
+
+func (h *Host) Snapshot() State {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	state := h.state
+	state.Records = slices.Clone(state.Records)
+	return state
+}
+
+func (h *Host) Enqueue(notice Notice) (Record, error) {
+	if !validNotice(notice) {
+		return Record{}, errors.New("invalid_notice")
+	}
+	data, err := h.cfg.Adapter.Encode(notice, h.cfg.Selection)
+	if err != nil || len(data) == 0 || len(data) > 4096 {
+		return Record{}, errors.New("adapter_input_refused")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ctx.Err() != nil || h.err != nil {
+		return Record{}, errors.New("host_unavailable")
+	}
+	digest := digestNotice(notice, h.state.Selection)
+	for _, record := range h.state.Records {
+		if record.Notice.ID == notice.ID {
+			if record.Digest != digest {
+				return Record{}, errors.New("request_conflict")
+			}
+			return record, nil
+		}
+	}
+	if h.state.StopRequested {
+		return Record{}, errors.New("session_stopped")
+	}
+	if len(h.state.Records) >= MaxRecords {
+		return Record{}, errors.New("queue_capacity_exceeded")
+	}
+	next := h.state
+	next.Sequence++
+	record := Record{Notice: notice, Digest: digest, Sequence: next.Sequence, State: "queued"}
+	next.Records = append(slices.Clone(next.Records), record)
+	if err := h.persistLocked(next); err != nil {
+		return Record{}, err
+	}
+	h.wake()
+	return record, nil
+}
+
+func (h *Host) Fence(open bool) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ctx.Err() != nil {
+		return errors.New("host_unavailable")
+	}
+	if h.state.Fence == "unknown" {
+		return errors.New("reconciliation_required")
+	}
+	if open && h.state.StopRequested {
+		return errors.New("session_stopped")
+	}
+	next := h.state
+	next.Fence = "held"
+	if open {
+		next.Fence = "open"
+	}
+	if err := h.persistLocked(next); err != nil {
+		return err
+	}
+	h.wake()
+	return nil
+}
+
+func (h *Host) wake() {
+	select {
+	case h.kick <- struct{}{}:
+	default:
+	}
+}
+
+func (h *Host) dispatch() {
+	defer h.wg.Done()
+	for {
+		select {
+		case <-h.ctx.Done():
+			return
+		case <-h.kick:
+		}
+		for h.deliverNext() {
+		}
+	}
+}
+
+func (h *Host) deliverNext() bool {
+	h.mu.Lock()
+	if h.ctx.Err() != nil || h.err != nil || h.state.Fence != "open" {
+		h.mu.Unlock()
+		return false
+	}
+	index := -1
+	for i, record := range h.state.Records {
+		if record.State == "queued" {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		h.mu.Unlock()
+		return false
+	}
+	next := h.state
+	next.Records = slices.Clone(next.Records)
+	next.Records[index].State = "unknown"
+	if err := h.persistLocked(next); err != nil {
+		h.mu.Unlock()
+		return false
+	}
+	record, epoch := next.Records[index], next.Epoch
+	h.mu.Unlock()
+	// No host state lock crosses adapter/runner I/O. The persisted unknown
+	// record is the in-flight marker and prevents replay after a crash.
+	data, err := h.cfg.Adapter.Encode(record.Notice, h.cfg.Selection)
+	ctx, cancel := context.WithTimeout(h.ctx, h.cfg.IOTimeout)
+	defer cancel()
+	applied := false
+	if err == nil {
+		response, callErr := h.client.Call(ctx, runner.Request{Op: "write", Execution: h.cfg.Execution, Epoch: epoch, Sequence: record.Sequence, Data: data})
+		if callErr == nil && response.Code == "written" {
+			var output []byte
+			for ctx.Err() == nil {
+				read, readErr := h.client.Call(ctx, runner.Request{Op: "read", Execution: h.cfg.Execution, Epoch: epoch, Offset: len(output)})
+				if readErr != nil || read.Code != "ok" || len(read.Data) == 0 {
+					break
+				}
+				output = append(output, read.Data...)
+				applied, err = h.cfg.Adapter.Applied(output, record.Notice, h.cfg.Selection)
+				if applied || err != nil {
+					break
+				}
+			}
+		}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ctx.Err() != nil || h.state.Epoch != epoch {
+		return false
+	}
+	next = h.state
+	next.Records = slices.Clone(next.Records)
+	if applied {
+		next.Records[index].State = "applied"
+	} else {
+		next.Fence = "unknown"
+	}
+	if err := h.persistLocked(next); err != nil {
+		return false
+	}
+	return applied
+}
+
+func (h *Host) Stop(ctx context.Context) (runner.Response, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		return runner.Response{}, errors.New("deadline_required")
+	}
+	if err := ctx.Err(); err != nil {
+		return runner.Response{}, err
+	}
+	h.mu.Lock()
+	next := h.state
+	next.Fence = "held"
+	next.StopRequested = true
+	if h.state.Fence == "unknown" {
+		next.Fence = "unknown"
+	}
+	err := h.persistLocked(next)
+	epoch := h.state.Epoch
+	h.mu.Unlock()
+	if err != nil {
+		return runner.Response{}, err
+	}
+	return h.client.Call(ctx, runner.Request{Op: "stop", Execution: h.cfg.Execution, Epoch: epoch})
+}
+
+// Close releases only the controller; it never stops the runner child.
+func (h *Host) Close() error {
+	h.closeOnce.Do(func() {
+		h.cancel()
+		h.wg.Wait()
+		ctx, cancel := context.WithTimeout(context.Background(), h.cfg.IOTimeout)
+		h.client.Call(ctx, runner.Request{Op: "release", Execution: h.cfg.Execution, Epoch: h.state.Epoch})
+		cancel()
+		h.client.Close()
+		h.store.close()
+	})
+	return nil
+}
