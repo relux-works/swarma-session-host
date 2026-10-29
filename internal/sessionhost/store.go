@@ -86,7 +86,7 @@ func (s *store) read() (State, bool, error) {
 		seen[record.Notice.ID] = true
 		maxSequence = record.Sequence
 	}
-	if state.Sequence != maxSequence {
+	if state.Sequence != maxSequence || !validProtocolState(state) {
 		return State{}, false, errors.New("state_corrupt")
 	}
 	return state, true, nil

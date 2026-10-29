@@ -23,6 +23,9 @@ import (
 const MaxOutput = 32 << 10
 const MaxWrites = 128
 
+const ProtocolVersion = 2
+const WriteReceiptVersion = 1
+
 type Plan struct {
 	Binary string   `json:"binary"`
 	Args   []string `json:"args"`
@@ -44,19 +47,22 @@ type Request struct {
 	Sequence  uint64 `json:"sequence,omitempty"`
 	Data      []byte `json:"data,omitempty"`
 	Offset    int    `json:"offset,omitempty"`
+	Digest    string `json:"digest,omitempty"`
 }
 
 type Response struct {
-	Code     string `json:"code"`
-	Instance string `json:"instance"`
-	Epoch    uint64 `json:"epoch"`
-	PID      int    `json:"pid"`
-	Exited   bool   `json:"exited"`
-	ExitCode int    `json:"exit_code"`
-	Data     []byte `json:"data,omitempty"`
-	Offset   int    `json:"offset"`
-	Overflow bool   `json:"overflow"`
-	Writes   int    `json:"writes"`
+	ProtocolVersion     int    `json:"protocol_version"`
+	WriteReceiptVersion int    `json:"write_receipt_version"`
+	Code                string `json:"code"`
+	Instance            string `json:"instance"`
+	Epoch               uint64 `json:"epoch"`
+	PID                 int    `json:"pid"`
+	Exited              bool   `json:"exited"`
+	ExitCode            int    `json:"exit_code"`
+	Data                []byte `json:"data,omitempty"`
+	Offset              int    `json:"offset"`
+	Overflow            bool   `json:"overflow"`
+	Writes              int    `json:"writes"`
 }
 
 type writeRecord struct {
@@ -299,7 +305,7 @@ func (s *Server) handle(conn *net.UnixConn) {
 }
 
 func (s *Server) snapshotLocked(code string) Response {
-	return Response{Code: code, Instance: s.instance, Epoch: s.epoch, PID: s.pid,
+	return Response{ProtocolVersion: ProtocolVersion, WriteReceiptVersion: WriteReceiptVersion, Code: code, Instance: s.instance, Epoch: s.epoch, PID: s.pid,
 		Exited: s.exited, ExitCode: s.exitCode, Offset: len(s.output), Overflow: s.overflow, Writes: len(s.writes)}
 }
 
@@ -317,7 +323,7 @@ func (s *Server) process(conn *net.UnixConn, req Request) Response {
 		if req.Execution != s.cfg.Execution {
 			return s.snapshotLocked("wrong_execution")
 		}
-		if s.owner != nil || req.Epoch <= s.epoch || req.Sequence != 0 || len(req.Data) != 0 || req.Offset != 0 {
+		if s.owner != nil || req.Epoch <= s.epoch || req.Sequence != 0 || len(req.Data) != 0 || req.Offset != 0 || req.Digest != "" {
 			return s.snapshotLocked("controller_conflict")
 		}
 		s.owner, s.epoch = conn, req.Epoch
@@ -344,6 +350,8 @@ func (s *Server) process(conn *net.UnixConn, req Request) Response {
 	switch req.Op {
 	case "write":
 		return s.write(conn, req)
+	case "write-receipt":
+		return s.receipt(conn, req)
 	case "read":
 		return s.read(req)
 	case "stop":
@@ -373,6 +381,28 @@ func (s *Server) process(conn *net.UnixConn, req Request) Response {
 		defer s.mu.Unlock()
 		return s.snapshotLocked("unsupported_operation")
 	}
+}
+
+// receipt observes a reserved effect without reserving or repeating any write.
+// It can observe write_unknown while a pipe write is still in flight.
+func (s *Server) receipt(conn *net.UnixConn, req Request) Response {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.owner != conn || req.Epoch != s.epoch {
+		return s.snapshotLocked("stale_controller")
+	}
+	digest, err := hex.DecodeString(req.Digest)
+	if err != nil || len(digest) != sha256.Size || req.Sequence == 0 || req.Sequence > MaxWrites || len(req.Data) != 0 || req.Offset != 0 {
+		return s.snapshotLocked("invalid_receipt")
+	}
+	prior, ok := s.writes[req.Sequence]
+	if !ok {
+		return s.snapshotLocked("write_missing")
+	}
+	if !bytes.Equal(prior.digest[:], digest) {
+		return s.snapshotLocked("sequence_conflict")
+	}
+	return s.snapshotLocked(prior.code)
 }
 
 func (s *Server) write(conn *net.UnixConn, req Request) Response {

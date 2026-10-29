@@ -48,9 +48,11 @@ func TestControlEndpointFencesMutations(t *testing.T) {
 		{cfg.Execution, 0, "enqueue", "stale_session"},
 		{"other", 1, "enqueue", "stale_session"},
 		{cfg.Execution, 1, "unsupported", "unsupported_operation"},
+		{cfg.Execution, 1, "goal.set", "goal_operation_unsupported"},
+		{cfg.Execution, 1, "goal.clear", "goal_operation_unsupported"},
 		{cfg.Execution, 1, "enqueue", "ok"},
 	} {
-		request.Execution, request.Epoch, request.Op = tc.execution, tc.epoch, tc.op
+		request.Execution, request.Epoch, request.Op = tc.execution, tc.epoch, sessionhost.ControlOperation(tc.op)
 		callCtx, stop := context.WithTimeout(context.Background(), time.Second)
 		response, err := sessionhost.Call(callCtx, endpoint, request)
 		stop()

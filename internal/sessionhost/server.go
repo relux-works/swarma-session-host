@@ -14,10 +14,11 @@ import (
 )
 
 type Request struct {
-	Op        string `json:"op"`
-	Execution string `json:"execution"`
-	Epoch     uint64 `json:"epoch"`
-	Notice    Notice `json:"notice,omitempty"`
+	Op        ControlOperation `json:"op"`
+	Execution string           `json:"execution"`
+	Epoch     uint64           `json:"epoch"`
+	Notice    Notice           `json:"notice,omitempty"`
+	Goal      *GoalControl     `json:"goal,omitempty"`
 }
 
 type Response struct {
@@ -108,6 +109,8 @@ func execute(ctx context.Context, timeout time.Duration, host *Host, request Req
 		if err == nil && result.Code != "stopped" {
 			err = errors.New("stop_unknown")
 		}
+	case GoalSet, GoalClear:
+		err = errors.New("goal_operation_unsupported")
 	default:
 		err = errors.New("unsupported_operation")
 	}

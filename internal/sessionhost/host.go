@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	ap "github.com/relux-works/swarma-session-host/internal/adapterprotocol"
 	"github.com/relux-works/swarma-session-host/internal/runner"
 )
 
@@ -64,48 +65,62 @@ type Adapter interface {
 }
 
 type Record struct {
-	Notice   Notice `json:"notice"`
-	Digest   string `json:"digest"`
-	Sequence uint64 `json:"sequence"`
-	State    string `json:"state"`
+	Notice         Notice `json:"notice"`
+	Digest         string `json:"digest"`
+	Sequence       uint64 `json:"sequence"`
+	State          string `json:"state"`
+	NativeAccepted bool   `json:"native_accepted,omitempty"`
+	NativeSession  string `json:"native_session,omitempty"`
+	NativeTurn     string `json:"native_turn,omitempty"`
+	NativeReceipt  string `json:"native_receipt,omitempty"`
+	Outcome        string `json:"outcome,omitempty"`
 }
 
 type State struct {
-	Version         int        `json:"version"`
-	Execution       string     `json:"execution"`
-	RunnerInstance  string     `json:"runner_instance"`
-	Adapter         string     `json:"adapter"`
-	Selection       Selection  `json:"selection"`
-	Epoch           uint64     `json:"epoch"`
-	Sequence        uint64     `json:"sequence"`
-	Fence           string     `json:"fence"`
-	Records         []Record   `json:"records"`
-	StopRequested   bool       `json:"stop_requested"`
-	InputState      InputState `json:"input_state"`
-	SecurityStopped bool       `json:"security_stopped"`
+	Version         int            `json:"version"`
+	Execution       string         `json:"execution"`
+	RunnerInstance  string         `json:"runner_instance"`
+	Adapter         string         `json:"adapter"`
+	Selection       Selection      `json:"selection"`
+	Epoch           uint64         `json:"epoch"`
+	Sequence        uint64         `json:"sequence"`
+	Fence           string         `json:"fence"`
+	Records         []Record       `json:"records"`
+	StopRequested   bool           `json:"stop_requested"`
+	InputState      InputState     `json:"input_state"`
+	SecurityStopped bool           `json:"security_stopped"`
+	Protocol        *ProtocolState `json:"protocol,omitempty"`
 }
 
 type Config struct {
-	StateDir  string
-	Socket    string
-	Execution string
-	Selection Selection
-	Adapter   Adapter
-	IOTimeout time.Duration
+	StateDir        string
+	Socket          string
+	Execution       string
+	Selection       Selection
+	Adapter         Adapter
+	IOTimeout       time.Duration
+	ProtocolName    string
+	ProtocolFactory func([]byte) (ap.Driver, uint64, error)
+	PollInterval    time.Duration
 }
 
 type Host struct {
-	cfg       Config
-	store     *store
-	client    *runner.Client
-	mu        sync.Mutex
-	state     State
-	err       error
-	ctx       context.Context
-	cancel    context.CancelFunc
-	kick      chan struct{}
-	wg        sync.WaitGroup
-	closeOnce sync.Once
+	cfg            Config
+	store          *store
+	client         *runner.Client
+	mu             sync.Mutex
+	state          State
+	err            error
+	ctx            context.Context
+	cancel         context.CancelFunc
+	kick           chan struct{}
+	wg             sync.WaitGroup
+	closeOnce      sync.Once
+	driver         ap.Driver
+	outputOffset   uint64
+	recovering     bool
+	protocolFailed bool
+	writeBlocked   bool
 }
 
 func validNotice(n Notice) bool { return scalar.MatchString(n.ID) && scalar.MatchString(n.Reference) }
@@ -124,7 +139,12 @@ func digestNotice(n Notice, s Selection) string {
 }
 
 func Open(cfg Config) (*Host, error) {
-	if cfg.Adapter == nil || !scalar.MatchString(cfg.Adapter.Name()) || !scalar.MatchString(cfg.Execution) || !validSelection(cfg.Selection) || cfg.IOTimeout <= 0 || cfg.IOTimeout > time.Minute {
+	name := cfg.ProtocolName
+	protocol := cfg.ProtocolFactory != nil
+	if !protocol && cfg.Adapter != nil {
+		name = cfg.Adapter.Name()
+	}
+	if (protocol && (cfg.Adapter != nil || cfg.PollInterval <= 0 || cfg.PollInterval > time.Minute)) || (!protocol && (cfg.Adapter == nil || cfg.ProtocolName != "")) || !scalar.MatchString(name) || !scalar.MatchString(cfg.Execution) || !validSelection(cfg.Selection) || cfg.IOTimeout <= 0 || cfg.IOTimeout > time.Minute {
 		return nil, errors.New("invalid_host_config")
 	}
 	store, err := openStore(cfg.StateDir)
@@ -136,12 +156,29 @@ func Open(cfg Config) (*Host, error) {
 		store.close()
 		return nil, err
 	}
-	if exists && (state.Execution != cfg.Execution || state.Adapter != cfg.Adapter.Name() || state.Selection != cfg.Selection) {
+	if exists && (state.Execution != cfg.Execution || state.Adapter != name || state.Selection != cfg.Selection || (state.Protocol != nil) != protocol) {
 		store.close()
 		return nil, errors.New("stored_plan_conflict")
 	}
 	if !exists {
-		state = State{Version: 1, Execution: cfg.Execution, Adapter: cfg.Adapter.Name(), Selection: cfg.Selection, Fence: "held", InputState: InputUnknown}
+		state = State{Version: 1, Execution: cfg.Execution, Adapter: name, Selection: cfg.Selection, Fence: "held", InputState: InputUnknown}
+	}
+	var driver ap.Driver
+	var outputOffset uint64
+	if protocol {
+		var saved []byte
+		if state.Protocol != nil {
+			saved = state.Protocol.Checkpoint
+		}
+		driver, outputOffset, err = cfg.ProtocolFactory(saved)
+		if err != nil || driver == nil || driver.Descriptor().Name != name || ap.Validate(driver.Descriptor(), driver.Snapshot()) != nil || outputOffset > runner.MaxOutput {
+			store.close()
+			return nil, errors.New("protocol_restore_refused")
+		}
+		if state.Protocol == nil {
+			state.Protocol = &ProtocolState{Checkpoint: driver.Snapshot().Checkpoint, View: driver.Snapshot().View}
+		}
+		state.InputState = InputUnknown
 	}
 	state.Epoch++
 	if state.Epoch == 0 {
@@ -165,12 +202,32 @@ func Open(cfg Config) (*Host, error) {
 		return nil, errors.New("runner_unavailable")
 	}
 	claim, err := client.Call(ctx, runner.Request{Op: "claim", Execution: cfg.Execution, Epoch: state.Epoch})
+	// A canceled poll may close the old connection just before its handler
+	// releases ownership. Wait only for that bounded protocol handoff; never
+	// raise the epoch or displace a still-live controller to make it pass.
+	for protocol && err == nil && claim.Code == "controller_conflict" && ctx.Err() == nil {
+		timer := time.NewTimer(5 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		claim, err = client.Call(ctx, runner.Request{Op: "claim", Execution: cfg.Execution, Epoch: state.Epoch})
+	}
 	if err != nil || claim.Code != "ok" || len(claim.Instance) != 32 || claim.PID <= 0 || claim.Epoch != state.Epoch || (exists && state.RunnerInstance != "" && state.RunnerInstance != claim.Instance) {
 		client.Close()
 		store.close()
 		return nil, errors.New("runner_claim_refused")
 	}
 	state.RunnerInstance = claim.Instance
+	if protocol && (claim.ProtocolVersion != runner.ProtocolVersion || claim.WriteReceiptVersion != runner.WriteReceiptVersion) {
+		client.Close()
+		store.close()
+		return nil, errors.New("runner_protocol_unsupported")
+	}
 	state.Fence = "open"
 	if priorFence == "unknown" || (exists && priorFence == "held") {
 		state.Fence = priorFence
@@ -183,6 +240,9 @@ func Open(cfg Config) (*Host, error) {
 	if claim.Exited || claim.Overflow {
 		state.Fence = "unknown"
 	}
+	if protocol && (claim.Writes > int(state.Protocol.WireSequence) || outputOffset > uint64(claim.Offset)) {
+		state.Fence = "unknown"
+	}
 	if state.StopRequested {
 		state.Fence = "held"
 	}
@@ -192,15 +252,33 @@ func Open(cfg Config) (*Host, error) {
 		return nil, err
 	}
 	workCtx, workCancel := context.WithCancel(context.Background())
-	h := &Host{cfg: cfg, store: store, client: client, state: state, ctx: workCtx, cancel: workCancel, kick: make(chan struct{}, 1)}
+	h := &Host{cfg: cfg, store: store, client: client, state: state, ctx: workCtx, cancel: workCancel, kick: make(chan struct{}, 1), driver: driver, outputOffset: outputOffset, recovering: exists}
 	if err := h.ObserveInput(); err != nil {
 		h.cancel()
 		client.Close()
 		store.close()
 		return nil, err
 	}
+	if protocol {
+		transition, beginErr := driver.Begin()
+		h.mu.Lock()
+		if beginErr == nil {
+			beginErr = h.persistTransitionLocked(transition)
+		}
+		h.mu.Unlock()
+		if beginErr != nil {
+			h.cancel()
+			client.Close()
+			store.close()
+			return nil, errors.New("protocol_begin_refused")
+		}
+	}
 	h.wg.Add(1)
-	go h.dispatch()
+	if protocol {
+		go h.dispatchProtocol()
+	} else {
+		go h.dispatch()
+	}
 	h.wake()
 	return h, nil
 }
@@ -224,18 +302,18 @@ func (h *Host) persistLocked(next State) error {
 func (h *Host) Snapshot() State {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	state := h.state
-	state.Records = slices.Clone(state.Records)
-	return state
+	return cloneState(h.state)
 }
 
 func (h *Host) Enqueue(notice Notice) (Record, error) {
 	if !validNotice(notice) {
 		return Record{}, errors.New("invalid_notice")
 	}
-	data, err := h.cfg.Adapter.Encode(notice, h.cfg.Selection)
-	if err != nil || len(data) == 0 || len(data) > 4096 {
-		return Record{}, errors.New("adapter_input_refused")
+	if h.driver == nil {
+		data, err := h.cfg.Adapter.Encode(notice, h.cfg.Selection)
+		if err != nil || len(data) == 0 || len(data) > 4096 {
+			return Record{}, errors.New("adapter_input_refused")
+		}
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -316,6 +394,9 @@ func (h *Host) ObserveInput() error {
 }
 
 func (h *Host) observeInput() error {
+	if h.driver != nil {
+		return nil
+	} // The ordered output worker owns protocol evidence.
 	observation := h.cfg.Adapter.InputState()
 	if !validInputState(observation) {
 		observation = InputUnknown
