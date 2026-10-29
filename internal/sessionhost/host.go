@@ -462,6 +462,9 @@ func (h *Host) observeInput() error {
 	next := h.state
 	next.InputState = observation
 	next.SecurityStopped = next.SecurityStopped || observation == InputSecurityStop
+	if next.Admission != nil && next.Admission.Failed {
+		next.InputState = InputUnknown
+	}
 	if next.InputState != h.state.InputState || next.SecurityStopped != h.state.SecurityStopped {
 		if err := h.persistLocked(next); err != nil {
 			return err

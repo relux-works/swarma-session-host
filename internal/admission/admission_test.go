@@ -102,7 +102,7 @@ func TestEvidenceMatrix(t *testing.T) {
 		c.Observe = func(context.Context) (Record, Lease, error) { return observed.Record, observed.Lease, nil }
 		_, err := verify(t, c, &prior)
 		want := revs[0] < 3 || revs[1] < 4
-		if (err != nil) != want {
+		if (want && (err == nil || err.Error() != "admission_revision_conflict")) || (!want && err != nil) {
 			t.Fatalf("revisions %v: %v", revs, err)
 		}
 	}

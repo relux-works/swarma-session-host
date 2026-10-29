@@ -36,15 +36,7 @@ func (h *Host) checkAdmission() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err != nil {
-		next := cloneState(h.state)
-		next.Admission.Failed = true
-		next.Fence = "unknown"
-		next.InputState = InputUnknown
-		h.writeBlocked = true
-		if persistErr := h.persistLocked(next); persistErr != nil {
-			return persistErr
-		}
-		return err
+		return h.failAdmissionLocked(err)
 	}
 	if proof == saved {
 		return nil
@@ -52,4 +44,18 @@ func (h *Host) checkAdmission() error {
 	next := cloneState(h.state)
 	next.Admission = &proof
 	return h.persistLocked(next)
+}
+
+// failAdmissionLocked commits identity/authority loss before returning its reason.
+// All callers hold h.mu; no observer or runner I/O occurs in this path.
+func (h *Host) failAdmissionLocked(reason error) error {
+	next := cloneState(h.state)
+	next.Admission.Failed = true
+	next.Fence = "unknown"
+	next.InputState = InputUnknown
+	h.writeBlocked = true
+	if err := h.persistLocked(next); err != nil {
+		return err
+	}
+	return reason
 }

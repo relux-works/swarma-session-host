@@ -46,6 +46,18 @@ func TestProtocolProcess(t *testing.T) {
 			write(map[string]any{"id": r.ID, "result": map[string]any{"userAgent": "synthetic", "platformFamily": "unix", "platformOs": "macos"}})
 		case "initialized":
 		case "thread/start":
+			if mode == "native-gated" {
+				deadline := time.Now().Add(10 * time.Second)
+				for {
+					if _, err := os.Stat("allow-thread-start"); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						os.Exit(7)
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
 			write(map[string]any{"id": r.ID, "result": map[string]any{"thread": map[string]any{"id": "synthetic-thread"}, "model": r.Params["model"], "modelProvider": r.Params["modelProvider"]}})
 			if mode == "eof-live" {
 				deadline := time.Now().Add(10 * time.Second)

@@ -382,6 +382,15 @@ func TestAdmissionRevocationAfterEncode(t *testing.T) {
 	if got := inspectRunner(t, cfg); got.Writes != 0 {
 		t.Fatalf("revoked lease allowed prepared write: %d", got.Writes)
 	}
+	assertFailedUnknown(t, cfg, h)
+	if err := h.ObserveInput(); err != nil {
+		t.Fatal(err)
+	}
+	assertFailedUnknown(t, cfg, h)
+	if err := h.Fence(true); err == nil || err.Error() != "reconciliation_required" {
+		t.Fatalf("failed release: %v", err)
+	}
+	assertFailedUnknown(t, cfg, h)
 	s := h.Snapshot()
 	if len(s.Records) != 1 || s.Records[0].State != "unknown" {
 		t.Fatal("reserved uncertainty not retained")
@@ -394,7 +403,11 @@ func TestAdmissionRevocationAfterEncode(t *testing.T) {
 func TestAdmissionProtocolGate(t *testing.T) {
 	for _, mode := range []string{"valid", "lease", "native"} {
 		t.Run(mode, func(t *testing.T) {
-			cfg, _, _ := setupProtocol(t, "normal")
+			fixtureMode := "normal"
+			if mode == "native" {
+				fixtureMode = "native-gated"
+			}
+			cfg, _, dir := setupProtocol(t, fixtureMode)
 			// Reuse only synthetic metadata construction, not an alternative transport.
 			base := cfg
 			base.Adapter = fixtureadapters.JSON{}
@@ -409,9 +422,40 @@ func TestAdmissionProtocolGate(t *testing.T) {
 			cfg.Admission = &admission.Config{Expected: p.proof, Observe: p.observe, Process: admission.ObserveProcess}
 			h := openHost(t, cfg)
 			if mode == "native" {
+				if _, err := h.Enqueue(sessionhost.Notice{ID: "retained", Reference: "fixture/retained"}); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "allow-thread-start"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
 				awaitProtocol(t, h, "native conflict closes fence", func(s sessionhost.State) bool { return s.Fence == "unknown" })
+				assertFailedUnknown(t, cfg, h)
+				if got := inspectRunner(t, cfg); got.Writes != 3 || got.PID != b.Harness.PID || got.Instance != b.RunnerInstance {
+					t.Fatalf("native conflict changed execution/effects: %+v", got)
+				}
+				if records := h.Snapshot().Records; len(records) != 1 || records[0].State != "queued" {
+					t.Fatal("native conflict lost queued intent")
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if _, err := h.Stop(ctx); err != nil {
+					t.Fatalf("owned stop: %v", err)
+				}
+				h.Close()
+				rejected, err := sessionhost.Open(cfg)
+				if err == nil {
+					rejected.Close()
+					t.Fatal("native conflict reopened verified admission")
+				}
+				if err.Error() != "admission_reconciliation_required" {
+					t.Fatal(err)
+				}
+				disk := readAdmissionDisk(t, cfg)
+				if len(disk.Records) != 1 || disk.Records[0].Notice.ID != "retained" || disk.Records[0].State != "queued" {
+					t.Fatal("native conflict lost durable intent")
+				}
 				if got := inspectRunner(t, cfg); got.Writes != 3 {
-					t.Fatalf("native conflict wrote turn: %d", got.Writes)
+					t.Fatal("native conflict replayed on recovery")
 				}
 				return
 			}
@@ -523,5 +567,51 @@ func TestAdmissionJournalRefusal(t *testing.T) {
 				t.Fatal("restored positive control failed")
 			}
 		})
+	}
+}
+
+func readAdmissionDisk(t *testing.T, cfg sessionhost.Config) sessionhost.State {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(cfg.StateDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s sessionhost.State
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func assertFailedUnknown(t *testing.T, cfg sessionhost.Config, h *sessionhost.Host) {
+	t.Helper()
+	for _, s := range []sessionhost.State{h.Snapshot(), readAdmissionDisk(t, cfg)} {
+		if s.Admission == nil || !s.Admission.Failed || s.Fence != "unknown" || s.InputState != sessionhost.InputUnknown {
+			t.Fatalf("failed admission lost unknown input/fence: input=%s fence=%s", s.InputState, s.Fence)
+		}
+	}
+}
+
+// Admission loss keeps input unknown through both idle and security-stop
+// observations; the independent security-stop latch survives subsequent idle.
+func TestAdmissionFailureSecurityStop(t *testing.T) {
+	a := &observedFixture{}
+	a.input.Store(sessionhost.InputIdle)
+	cfg, _ := setup(t, a, false)
+	cfg, p := admitted(t, cfg)
+	h := openHost(t, cfg)
+	p.set("lease")
+	if _, err := h.Enqueue(sessionhost.Notice{ID: "one", Reference: "fixture/one"}); err != nil {
+		t.Fatal(err)
+	}
+	awaitAdmissionFailure(t, h)
+	for _, state := range []sessionhost.InputState{sessionhost.InputSecurityStop, sessionhost.InputIdle} {
+		a.input.Store(state)
+		if err := h.ObserveInput(); err != nil {
+			t.Fatal(err)
+		}
+		assertFailedUnknown(t, cfg, h)
+		if !h.Snapshot().SecurityStopped || !readAdmissionDisk(t, cfg).SecurityStopped {
+			t.Fatal("security stop was not retained")
+		}
 	}
 }

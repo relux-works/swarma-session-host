@@ -131,7 +131,7 @@ func validProtocolState(s State) bool {
 // together before any pipe effect. The driver is local and performs no I/O.
 func (h *Host) persistTransitionLocked(t ap.Transition) error {
 	if h.state.Admission != nil && t.View.NativeSession != "" && t.View.NativeSession != h.state.Admission.Record.Binding.NativeSession {
-		return errors.New("admission_native_session_conflict")
+		return h.failAdmissionLocked(errors.New("admission_native_session_conflict"))
 	}
 	if ap.Validate(h.driver.Descriptor(), t) != nil {
 		return errors.New("protocol_transition_refused")

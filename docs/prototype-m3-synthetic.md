@@ -93,6 +93,22 @@ SIGKILL at in-flight, acknowledgement and applied boundaries retains the same
 runner/child and uncertainty. Bounded guard-removal controls check that process
 comparison and immediate pre-write lease revalidation detect their violations.
 
+Native-session conflicts use the same durable failure path as observation loss.
+Input remains unknown through idle refresh after failure; a security-stop
+observation still sets the separate sticky security-stop latch. The host pair
+matrix checks each identity class at initial admission with exact refusal and
+zero writes, alongside valid delivery and higher-revision reconnect controls.
+A test runner peer counts actual signals to its one owned child: observation
+loss sends none, while explicit owned stop sends one. This tests host routing;
+the production runner has its own stop qualification and unchanged wire format.
+
+Real-reader controls use an owned live child, altered expected UID/birth/CDHASH,
+a confirmed zombie and a reaped child. `/bin/ps -p PID -o stat=` supplies the
+non-reaping zombie barrier. Apple Silicon cannot execute a live unsigned arm64
+image; an actual failing `csops` operation instead checks unavailable evidence,
+with valid CDHASH reads before and after it. These controls do not prove atomic
+identity observations or arbitrary PID reuse safety.
+
 Run focused tests with:
 
 ```sh
