@@ -66,6 +66,11 @@ func (f *signalFixture) serve(conn *net.UnixConn) {
 				// A signal termination is expected; Wait reaps only this child.
 				f.child.Wait()
 				f.waited = true
+				status, ok := f.child.ProcessState.Sys().(syscall.WaitStatus)
+				if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+					r.Code = "stop_unknown"
+					break
+				}
 			}
 			r.Code = "stopped"
 			r.Exited = true
