@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/relux-works/swarma-session-host/internal/admission"
 	"github.com/relux-works/swarma-session-host/internal/localipc"
 )
 
@@ -72,7 +73,7 @@ func (s *store) read() (State, bool, error) {
 	if err := localipc.Decode(file, &state); err != nil {
 		return State{}, false, errors.New("state_corrupt")
 	}
-	if state.Version != 1 || !validInputState(state.InputState) || (state.InputState == InputSecurityStop && !state.SecurityStopped) || state.Execution == "" || state.Epoch == 0 || len(state.Records) > MaxRecords ||
+	if !((state.Version == 1 && state.Admission == nil) || (state.Version == 2 && state.Admission != nil && admission.Valid(*state.Admission))) || !validInputState(state.InputState) || (state.InputState == InputSecurityStop && !state.SecurityStopped) || state.Execution == "" || state.Epoch == 0 || len(state.Records) > MaxRecords ||
 		(state.Fence != "open" && state.Fence != "held" && state.Fence != "unknown") {
 		return State{}, false, errors.New("state_corrupt")
 	}

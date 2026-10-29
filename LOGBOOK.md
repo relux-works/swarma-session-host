@@ -5,6 +5,11 @@
 
 ## 2026-10-29
 
+### Admission is an execution binding, not a host-controller lifetime
+- FINDING: PID and session timestamps cannot identify the retained execution, and a valid lease observation can become invalid while an adapter prepares input.
+- FIX: Bind an internal synthetic record to full kernel birth/boot/UID/image identity, fixed execution metadata and a matching bound lease. Revalidate immediately before writes, persist proof/revisions, and latch observation loss across host replacement.
+- VALIDATION LIMIT: Owned synthetic processes and injected leases only. The Darwin image hash identifies an interpreter for script-hosted programs; it does not attest script contents, confer signal authority or provide real launcher/Curator integration.
+
 ### 2127 — Transport termination must cancel the effect, not only set a flag
 - FINDING: A reserved writer can resume after EOF and still enter stdin; a backpressured writer can complete later. Separately, an outbox loop can ignore EOF already present in a write reply and send its next action before polling.
 - FIX: Close the actual stdin writer before publishing output termination, canceling pending I/O without waiting on write serialization. Keep uncertain receipts. Retire a valid reply receipt and persist the closed host fence before considering the next action.

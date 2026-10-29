@@ -41,6 +41,10 @@ func wireDigest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToStr
 
 func cloneState(s State) State {
 	s.Records = slices.Clone(s.Records)
+	if s.Admission != nil {
+		a := *s.Admission
+		s.Admission = &a
+	}
 	if s.Protocol != nil {
 		p := *s.Protocol
 		p.Checkpoint = bytes.Clone(p.Checkpoint)
@@ -126,6 +130,9 @@ func validProtocolState(s State) bool {
 // persistTransitionLocked commits checkpoint, outgoing frames and native facts
 // together before any pipe effect. The driver is local and performs no I/O.
 func (h *Host) persistTransitionLocked(t ap.Transition) error {
+	if h.state.Admission != nil && t.View.NativeSession != "" && t.View.NativeSession != h.state.Admission.Record.Binding.NativeSession {
+		return errors.New("admission_native_session_conflict")
+	}
 	if ap.Validate(h.driver.Descriptor(), t) != nil {
 		return errors.New("protocol_transition_refused")
 	}
@@ -240,6 +247,11 @@ func (h *Host) blockProtocolWrites() {
 }
 
 func (h *Host) protocolCall(req runner.Request) (runner.Response, error) {
+	if req.Op == "write" {
+		if err := h.checkAdmission(); err != nil {
+			return runner.Response{}, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(h.ctx, h.cfg.IOTimeout)
 	defer cancel()
 	r, err := h.client.Call(ctx, req)
@@ -407,6 +419,9 @@ func (h *Host) dispatchProtocol() {
 			return
 		case <-h.kick:
 		case <-ticker.C:
+		}
+		if h.checkAdmission() != nil {
+			continue
 		}
 		settled := h.reconcileOutbox()
 		if !h.pollProtocol() {

@@ -16,6 +16,7 @@ jobs:
       GOTOOLCHAIN: local
       GOWORK: 'off'
       GOMAXPROCS: '2'
+      CGO_ENABLED: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,9 +30,18 @@ jobs:
         run: |
           # Both checks run even when the first one fails.
           set +e
-          go vet -p 1 ./...
+          run_check() {
+            python3 -c 'import os, sys; load = os.getloadavg()[0]; print("start load 1m:", load, flush=True); sys.exit(0 if load < 20 else 125)'
+            load_status=$?
+            if [ "$load_status" -ne 0 ]; then
+              printf 'check unavailable: start load could not be admitted\n'
+              return 125
+            fi
+            "$@"
+          }
+          run_check go vet -p 1 ./...
           vet_status=$?
-          go test -p 1 -race -count=1 -timeout=5m ./...
+          run_check go test -p 1 -race -count=1 -timeout=5m ./...
           test_status=$?
           printf 'go vet exit: %s\ngo test exit: %s\n' "$vet_status" "$test_status"
           if [ "$vet_status" -ne 0 ] || [ "$test_status" -ne 0 ]; then

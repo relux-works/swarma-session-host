@@ -4,9 +4,13 @@
   and launcher-to-host/runner plan ownership, including where current manager
   admission is enforced. No second registry or unilateral payload extension.
 - **Process proof/home lease:** qualify the session-record revision and kernel
-  process-incarnation evidence required to complete hosted admission. The M1
+  process-incarnation evidence required to complete hosted admission. The M3-S
+  internal synthetic seam checks owned macOS process tuples and injected
+  bound-lease metadata; it implements no external launcher schema or real lease.
+  Real admission still requires the launcher record/observation revision, the
+  Curator lease API release and a production observer accepting bind. The M1
   public runner instance identifier is not that proof. Exact-plan compatibility
-  and successful lease binding remain unimplemented.
+  and successful real lease binding remain unimplemented.
 - **Remaining harness qualification:** Codex 0.164.0 synthetic no-tool turns and
   retained-session host replacement pass the disposable native protocol slice.
   Claude headless stream-json and Muse MSP still need native qualification;

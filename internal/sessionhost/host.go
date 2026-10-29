@@ -13,6 +13,7 @@ import (
 	"time"
 
 	ap "github.com/relux-works/swarma-session-host/internal/adapterprotocol"
+	"github.com/relux-works/swarma-session-host/internal/admission"
 	"github.com/relux-works/swarma-session-host/internal/runner"
 )
 
@@ -77,22 +78,25 @@ type Record struct {
 }
 
 type State struct {
-	Version         int            `json:"version"`
-	Execution       string         `json:"execution"`
-	RunnerInstance  string         `json:"runner_instance"`
-	Adapter         string         `json:"adapter"`
-	Selection       Selection      `json:"selection"`
-	Epoch           uint64         `json:"epoch"`
-	Sequence        uint64         `json:"sequence"`
-	Fence           string         `json:"fence"`
-	Records         []Record       `json:"records"`
-	StopRequested   bool           `json:"stop_requested"`
-	InputState      InputState     `json:"input_state"`
-	SecurityStopped bool           `json:"security_stopped"`
-	Protocol        *ProtocolState `json:"protocol,omitempty"`
+	Version         int                 `json:"version"`
+	Admission       *admission.Snapshot `json:"admission,omitempty"`
+	Execution       string              `json:"execution"`
+	RunnerInstance  string              `json:"runner_instance"`
+	Adapter         string              `json:"adapter"`
+	Selection       Selection           `json:"selection"`
+	Epoch           uint64              `json:"epoch"`
+	Sequence        uint64              `json:"sequence"`
+	Fence           string              `json:"fence"`
+	Records         []Record            `json:"records"`
+	StopRequested   bool                `json:"stop_requested"`
+	InputState      InputState          `json:"input_state"`
+	SecurityStopped bool                `json:"security_stopped"`
+	Protocol        *ProtocolState      `json:"protocol,omitempty"`
 }
 
 type Config struct {
+	// Admission is an opt-in internal synthetic proof seam, not a hosted launcher.
+	Admission       *admission.Config
 	StateDir        string
 	Socket          string
 	Execution       string
@@ -147,6 +151,14 @@ func Open(cfg Config) (*Host, error) {
 	if (protocol && (cfg.Adapter != nil || cfg.PollInterval <= 0 || cfg.PollInterval > time.Minute)) || (!protocol && (cfg.Adapter == nil || cfg.ProtocolName != "")) || !scalar.MatchString(name) || !scalar.MatchString(cfg.Execution) || !validSelection(cfg.Selection) || cfg.IOTimeout <= 0 || cfg.IOTimeout > time.Minute {
 		return nil, errors.New("invalid_host_config")
 	}
+	if cfg.Admission != nil {
+		c := *cfg.Admission // Freeze caller-owned expectation; provider callbacks remain injected.
+		cfg.Admission = &c
+		b := c.Expected.Record.Binding
+		if admission.ValidateConfig(c) != nil || b.Execution != cfg.Execution || b.RunnerSocket != cfg.Socket || b.Runtime != name || b.Vendor != cfg.Selection.Vendor || b.Model != cfg.Selection.Model || b.Effort != cfg.Selection.Reasoning {
+			return nil, errors.New("admission_config_conflict")
+		}
+	}
 	store, err := openStore(cfg.StateDir)
 	if err != nil {
 		return nil, err
@@ -162,6 +174,16 @@ func Open(cfg Config) (*Host, error) {
 	}
 	if !exists {
 		state = State{Version: 1, Execution: cfg.Execution, Adapter: name, Selection: cfg.Selection, Fence: "held", InputState: InputUnknown}
+	}
+	if exists && ((state.Admission != nil) != (cfg.Admission != nil) || (state.Admission != nil && state.Admission.Failed)) {
+		store.close()
+		return nil, errors.New("admission_reconciliation_required")
+	}
+	if !exists && cfg.Admission != nil {
+		marker := cfg.Admission.Expected
+		marker.Failed = true
+		state.Version = 2
+		state.Admission = &marker // A crash before verification cannot become admission.
 	}
 	var driver ap.Driver
 	var outputOffset uint64
@@ -182,6 +204,10 @@ func Open(cfg Config) (*Host, error) {
 			return nil, errors.New("protocol_release_conflict")
 		}
 		state.InputState = InputUnknown
+		if cfg.Admission != nil && cfg.Admission.Expected.Record.Binding.NativeRelease != driver.Descriptor().ObservedRelease {
+			store.close()
+			return nil, errors.New("admission_release_conflict")
+		}
 	}
 	state.Epoch++
 	if state.Epoch == 0 {
@@ -226,6 +252,30 @@ func Open(cfg Config) (*Host, error) {
 		return nil, errors.New("runner_claim_refused")
 	}
 	state.RunnerInstance = claim.Instance
+	if cfg.Admission != nil {
+		var prior *admission.Snapshot
+		if exists {
+			prior = state.Admission
+		}
+		proof, proofErr := admission.Verify(ctx, *cfg.Admission, prior, claim.Instance, claim.PID)
+		if proofErr != nil {
+			state.Fence = "unknown"
+			state.InputState = InputUnknown
+			if state.Admission != nil {
+				failed := *state.Admission
+				failed.Failed = true
+				state.Admission = &failed
+			}
+			persistErr := store.write(state)
+			client.Close()
+			store.close()
+			if persistErr != nil {
+				return nil, errors.New("host_storage_unavailable")
+			}
+			return nil, proofErr
+		}
+		state.Admission = &proof
+	}
 	if protocol && (claim.ProtocolVersion != runner.ProtocolVersion || claim.WriteReceiptVersion != runner.WriteReceiptVersion) {
 		client.Close()
 		store.close()
@@ -441,6 +491,9 @@ func (h *Host) dispatch() {
 }
 
 func (h *Host) deliverNext() bool {
+	if h.checkAdmission() != nil {
+		return false
+	}
 	if err := h.observeInput(); err != nil {
 		return false
 	}
@@ -475,6 +528,10 @@ func (h *Host) deliverNext() bool {
 	ctx, cancel := context.WithTimeout(h.ctx, h.cfg.IOTimeout)
 	defer cancel()
 	applied := false
+	// Re-observe after adapter preparation: a lease can be lost while Encode runs.
+	if err == nil {
+		err = h.checkAdmission()
+	}
 	if err == nil {
 		response, callErr := h.client.Call(ctx, runner.Request{Op: "write", Execution: h.cfg.Execution, Epoch: epoch, Sequence: record.Sequence, Data: data})
 		if callErr == nil && response.Code == "written" {
