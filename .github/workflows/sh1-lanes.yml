@@ -1,94 +1,58 @@
-name: sh1-lanes
+name: public-components
 
 on:
   push:
     branches: ['**']
+  pull_request:
   workflow_dispatch:
-    inputs:
-      spm_ref:
-        description: Board ref to resolve once for all lanes (main for development)
-        required: true
-        default: main
-        type: string
 
 permissions:
   contents: read
 
 jobs:
-  source:
-    if: github.repository == 'relux-works/swarma-session-host'
-    runs-on: ubuntu-latest
-    outputs:
-      commit: ${{ steps.identity.outputs.commit }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with:
-          repository: relux-works/skill-project-management
-          ref: ${{ inputs.spm_ref || 'main' }}
-          token: ${{ secrets.SPM_READ_TOKEN }}
-          persist-credentials: false
-          sparse-checkout: tools/board-cli/go.mod
-          sparse-checkout-cone-mode: false
-      - id: identity
-        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-  lanes:
-    needs: source
+  components:
+    name: components (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - lane: projection
-            os: macos-latest
-            informative: false
-          - lane: projection
-            os: ubuntu-latest
-            informative: true
-          - lane: consumer
-            os: ubuntu-latest
-            informative: false
-    name: ${{ matrix.lane }} (${{ matrix.os }}, ${{ matrix.informative && 'informative' || 'gating' }})
-    continue-on-error: ${{ matrix.informative }}
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 20
     env:
       GOTOOLCHAIN: local
       GOWORK: 'off'
-      GOFLAGS: ''
+      GOFLAGS: '-mod=readonly'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
-          path: host
-          persist-credentials: false
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with:
-          repository: relux-works/skill-project-management
-          ref: ${{ needs.source.outputs.commit }}
-          path: board
-          token: ${{ secrets.SPM_READ_TOKEN }}
           persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
-          go-version-file: board/tools/board-cli/go.mod
+          go-version: '1.26.8'
           cache: false
-      - name: Run lane and record actual exits
-        env:
-          SH1_LANE: ${{ matrix.lane }}
-          SH1_BOARD_COMMIT: ${{ needs.source.outputs.commit }}
-        run: python3 host/tools/sh1/ci/run.py
-      - name: Upload reports only (never checkout, candidate, cache, proxy or logs)
+      - name: Prepare component test environment
+        shell: bash
+        run: |
+          socket_root=$(mktemp -d /tmp/sh1.XXXXXX)
+          chmod 700 "$socket_root"
+          echo "SESSIONHOST_TEST_SOCKET_ROOT=$socket_root" >> "$GITHUB_ENV"
+      - name: Component command selection witness
+        run: python3 -m unittest discover -s tools/sh1/ci -p 'test_component_selection.py' -v
+      - name: Verify dependencies
+        run: go mod verify
+      - name: Build components
+        run: go build -p=1 ./...
+      - name: Vet components
+        run: go vet -p=1 ./...
+      - name: Full component suites
+        shell: bash
+        run: |
+          umask 022
+          go test -p=1 -parallel=1 -count=1 ./...
+      - name: Remove owned socket root
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sh1-${{ matrix.lane }}-${{ matrix.os }}
-          path: |
-            ${{ runner.temp }}/sh1-reports/summary.json
-            ${{ runner.temp }}/sh1-reports/manifest.json
-            ${{ runner.temp }}/sh1-reports/project.json
-            ${{ runner.temp }}/sh1-reports/inventory.json
-            ${{ runner.temp }}/sh1-reports/baseline-inventory.json
-            ${{ runner.temp }}/sh1-reports/equivalence.json
-            ${{ runner.temp }}/sh1-reports/guards.json
-            ${{ runner.temp }}/sh1-reports/mutations.json
-            ${{ runner.temp }}/sh1-reports/consumer.json
-          if-no-files-found: error
+        shell: bash
+        run: |
+          if [ -n "$SESSIONHOST_TEST_SOCKET_ROOT" ]; then
+            rmdir "$SESSIONHOST_TEST_SOCKET_ROOT"
+          fi

@@ -1,41 +1,122 @@
-# SH1 gate interface
+# SH1 public component gate
 
-F part 1 adds generic tooling and an invented fixture. It copies no package
-implementation. Green public tooling CI validates the tools; it does not prove
-that the private session manager can be extracted, or activate any SH2 capability.
-The recursive source snapshot and the actual three-lane proof remain later work.
+## Active workflows
 
-## Lanes and ownership
+[`.github/workflows/sh1-lanes.yml`](../.github/workflows/sh1-lanes.yml) runs
+`public-components` on pushes, pull requests and manual dispatch. Each job checks
+out this repository only, with checkout credentials disabled. It requires no
+private source ref, access token or private repository checkout. Both Ubuntu and
+native macOS matrix jobs are gating (`fail-fast: false`, no allowed-failure lane).
+Pinned actions install Go 1.26.8 with automatic toolchain selection and workspace
+mode disabled, module edits refused and setup-go caching disabled.
 
-The [M-SH4 gate deployment figure](../diagrams/sh1-gate-deployment.puml)
-shows the current hosted prototype, the full release gate in
-[spec §2.4](../spec/session-host.md#24-the-gate-three-lanes), evidence ownership
-and the operator cutover/refusal branches. The
-[storage ownership figure](../diagrams/storage-layout.puml) keeps current/SH1
-state separate from the gated SH2+ service boundary.
+Each job keeps dependency verification, component build and vet, then runs the
+full recursive module suites. It creates a unique mode-0700 directory under
+`/tmp` for `SESSIONHOST_TEST_SOCKET_ROOT`, and uses `umask 022` for the tests.
+The short root avoids Unix-socket path overflow, including on native macOS;
+the umask matches executable-mode fixtures. These settings do not alter any
+production server paths or test assertions. The final step removes the owned
+socket root after fixture cleanup.
 
-The owner decision of 2026-10-10 supersedes the original private workflow plan.
-`sh1-lanes.yml` runs on pushes to this public repository's own branches and on
-`workflow_dispatch` with `spm_ref` (default `main`). A hosted Ubuntu job resolves
-that ref once; all three matrix jobs check out the same exact board commit.
-No pull-request event can access the board token through this workflow.
+```sh
+go mod verify
+go build -p=1 ./...
+go vet -p=1 ./...
+umask 022
+go test -p=1 -parallel=1 -count=1 ./...
+```
 
-| Lane | Location | Input and gate |
-| --- | --- | --- |
-| 1: projection | GitHub-hosted macOS and Ubuntu | Same-runner baseline and projection of unchanged root and `musepty` tests, uncached and unmasked; exact outcome equivalence gates macOS, Ubuntu is informative; inventories, guard ratios and macOS named-test mutations. |
-| 2: consumer | GitHub-hosted Ubuntu | Candidate through the file GOPROXY, no candidate replace; `go build ./...` and `go vet ./...` for the board's CLI module (private source). |
-| 3: tooling | GitHub-hosted macOS and Ubuntu | Generic tool vet, race tests, build and fixture; this does not establish extracted-module conformance. |
+`GOTOOLCHAIN=local`, `GOWORK=off` and `GOFLAGS=-mod=readonly` apply to every Go
+step. The job deadline is 20 minutes; a timeout or any failed step is a failed
+job, never a passing qualification. Go's default per-package test timeout also
+applies. Neither a `-run` filter nor a test skip is added by the workflow.
 
-Every job grants only `contents: read`. Actions are pinned by commit SHA;
-checkout credentials are not persisted. `SPM_READ_TOKEN` is used only as the
-`token:` argument of a board checkout. The owner permits board code excerpts in
-public job logs. Lane artifacts upload only explicitly listed JSON manifests,
-inventories, projection/guard/mutation/consumer reports and timing summaries.
-They never upload board checkouts, candidate bytes, dependency caches, proxy
-archives or raw logs. Existing tooling artifacts contain the invented fixture
-only. All tests, builds and vet run on GitHub; none run on the development host.
+## Command-selection witness and inventories
 
-## Commands
+The named Python standard-library test
+`ComponentSelectionTests.test_full_component_selector_covers_every_package`
+reads the actual component workflow and requires the whole-module `./...`
+selector in its Go test command, with uncached serial execution and no name,
+skip or build-tag filter. It also inspects explicit workflow/job/step `GOFLAGS`
+keys: only a simple literal `-mod=readonly` declaration is admitted. Selection
+flags and unknown values (including expressions, aliases or multiline encodings)
+refuse. The scanner rejects a declaration when its next nonblank, noncomment
+line is deeper-indented than the key; it does not parse YAML. The named regression
+`test_goflags_declarations_cannot_filter_component_suites` pairs selection and
+expression refusals with literal readonly controls at all three scopes.
+`test_multiline_goflags_cannot_filter_component_suites` adds plain-scalar
+continuations, including across blank/comment lines, and unquoted, single-quoted
+and double-quoted readonly controls at each scope. Job and step fixtures assert that
+exactly one anchor was replaced and the declaration was materialized. These
+tests run in the component jobs and are also discovered by the existing tooling
+CI's Python test command:
+
+```sh
+python3 -m unittest discover -s tools/sh1/ci -p 'test_*.py' -v
+```
+
+The witness checks command selection and explicit `GOFLAGS` declarations only;
+it does not interpret arbitrary scripts, `if` guards or `continue-on-error`.
+A passing static witness does not assert that a component test ran, passed or
+exercised a native provider. Its bounded negative controls substitute the former
+four-test command, narrow the module selector or add a `GOFLAGS` filter in
+isolated workflow fixtures; the named assertions must fail. No product test
+source, name, golden or assertion is changed for those controls.
+The named `test_whole_module_selector_refuses_partial_component_lists` regression
+rejects the former five-component scope and explicit lists missing a composed
+service. Requiring `./...` also includes future command packages without changing
+the selector. This source change does not replay or qualify those full Go suites.
+
+For a compiled inventory without executing test bodies, retain the complete
+stdout/stderr and real exit of this command under `.temp/`:
+
+```sh
+go test -p=1 -parallel=1 -count=1 -list '^Test' ./...
+```
+
+The output records each selected package's top-level test names, including
+recursive helper packages. Counts are platform/build-tag specific; test listing
+is compilation and discovery evidence, never full-suite pass evidence. Dynamic
+subtests, inactive build tags and provider behavior require execution evidence.
+
+## Separate tooling CI and historical extraction tools
+
+[`.github/workflows/sh1-tooling.yml`](../.github/workflows/sh1-tooling.yml)
+retains its independent Ubuntu/native macOS tooling jobs with Go 1.25.5:
+Python report-admission regressions, formatting, vet, race tests and build for
+`tools/sh1/...`. The tooling workflow uploads its explicit fixture evidence
+under `sh1-evidence` in the runner's temporary directory. The component workflow
+currently exposes its commands and results in job logs; it uploads no component
+archive. Local logs and scratch artifacts belong under `.temp/`.
+
+The generic CLI and invented fixture remain historical extraction tools.
+Their retained [command contract](#historical-extraction-cli-contract) below
+requires caller-supplied disposable inputs and reports outside input trees.
+`tools/sh1/ci/run.py` and its declarations are retained historical projection
+machinery, not invoked by either active workflow. Earlier projection/consumer
+reports do not qualify today's public component candidate.
+
+## Qualification bounds
+
+The full selector preserves test-owned native/platform, provider, resource and
+opt-in prerequisites. Native macOS jobs can exercise Darwin implementations;
+Linux jobs cannot qualify them by cross-compilation. Live Claude/Codex/Muse
+provider tests and opt-in mutation suites remain unqualified when their declared
+prerequisites are absent. A recorded skip is not a pass for the skipped behavior.
+No private checkout, provider stub, renamed test, patched golden, synthetic hosted
+status or local CI mirror substitutes for a required hosted check.
+
+The assembled components do not yet constitute a complete standalone host.
+Required hosted checks, independent acceptance and Curator required-green gates
+remain separate obligations. Editing this workflow establishes no hosted run or
+Curator acceptance; evidence must bind the exact tested commit, platform,
+commands, exits and remaining unavailable subjects.
+
+The following tool contract and evidence schema are retained for historical
+extraction work. They are not prerequisites or private inputs for the active
+component workflow described above.
+
+## Historical extraction CLI contract
 
 Build the standard-library-only CLI with Go 1.25.5 (the source module's Go
 version). Paths below are relative to a disposable workspace. Keep reports outside
@@ -198,7 +279,7 @@ reviewed unrelated module resolutions; the tool does not silently fall back to
 the network. Run the real consumer build and full test commands with the same
 GOPROXY after this preparation step. The public end-to-end test does so.
 
-## What F records
+## Historical extraction evidence schema
 
 The gate's evidence bundle must include:
 
@@ -220,92 +301,13 @@ Artifacts live with the run and are attached to the Change Request before
 handoff. F remains provisional until the actual copy snapshot closes and all
 three lanes run on those pinned bytes.
 
-## Hosted lane contract
+## Archived extraction evidence (superseded)
 
-The helper `tools/sh1/ci/run.py` builds the generic CLI on the runner and derives
-its Go toolchain from the board's CLI module definition (private source). The reviewed prototype
-candidate retains that module's requirements, changes its module path to
-`github.com/relux-works/swarma-session-host`, and removes its two unrelated local
-board-library replacements. The empty version-1 projection adapter table is
-explicit. No tests, fixtures or goldens are patched. The opt-in declaration currently names
-the two Claude live smokes and Muse real-provider budget pause. Other
-environment-sensitive skips remain recorded with their observed reasons; the
-helper does not claim a complete environment-condition inference.
-
-Lane 1 runs exactly:
-
-```sh
-go test -json -count=1 -timeout=12m ./internal/sessionmanager ./internal/sessionmanager/musepty
-```
-
-In the same job and checkout, the helper first runs the full command against the
-unmodified board and records `baseline-inventory.json`; it then projects the
-candidate and runs that identical command, recording `inventory.json`.
-`equivalence.json` compares each `(package, test)` outcome in both directions,
-including dynamic subtests, skip reasons, declaration paths, tags, opt-in
-conditions and unobserved tagged declarations. Recursive fixture packages below
-`testdata/` remain inventoried and compared as unobserved outside the two-package
-command scope; untagged absence in either tested package still refuses. Package outcomes and actual test
-command exits must also match. A changed outcome, missing test, changed skip
-reason, absent package, unknown reason or malformed/partial evidence is red.
-Counts alone do not prove equality. No tests, fixtures or goldens are patched.
-macOS is gating, matching the board's package CI; Ubuntu shows the same diff and
-actual command exits under job-level `continue-on-error`, explicitly informative.
-A Linux failure shared by baseline and projection is pre-existing for that
-board commit, not a projection regression.
-
-The same full command supplies the macOS mutation baseline and every mutant run.
-`mutations.json` declares local identity isolation, default-port normalization
-(narrowing HTTPS out of the admitted normalization class), and remote board
-identity. Each must fail `TestBoardKeysCanonicalizeAndIsolateBoards`. Baseline
-failures and compile errors do not count as kills. Inventory discovery is scoped
-to the two tested packages at their original module-relative paths, with unchanged
-test and fixture bytes copied into separate inventory trees. Unrelated board CLI
-tests are outside this lane's stated bound. Inactive tagged tests are inventoried
-without enabling opt-in mutation suites. Ubuntu does not run these mutations.
-This starter list is bounded to identity behavior; converter and other real guard
-mutations and released-module conformance remain later gates.
-
-Guard read coverage is **informative** until upstream emits markers. The current
-report is **0/10, not instrumented upstream**; the inventory CLI still exits 1
-for incomplete guard reads, and that real exit is recorded. Only a valid written
-inventory with incomplete guard coverage receives this classification; malformed
-or missing evidence refuses. No marker is synthesized from a passing test.
-
-Upstream request: instrument `TestClaudeContextProductionHasNoFilesystemRemoval`
-to call `t.Log("SH1_GUARD " + relativeFile)` immediately after successfully
-reading each of its nine `claude*.go` production targets. Instrument
-`TestTheMutantInventoryCoversEveryPredicateOnTheRefusalPath` to emit
-`SH1_GUARD hosted_takeover_guard.go` after that successful read. Emit only from
-those named tests, with no marker on read failure; pin the accepted upstream
-commit before making 10/10 guard reads gating. The exact nine file names are
-listed in the historical evidence below and in the generated guard report.
-
-Lane 2 mirrors the board's downloaded public dependencies into the file proxy
-and publishes the retained board and remote-configuration libraries from the
-same board commit at their already required `v0.0.0` versions. These are explicit
-prototype dependencies, with publication hashes recorded; they are neither
-neutral interfaces nor independently released libraries. The candidate has no
-replace. The consumer retains the board's two original unrelated replacements.
-The extracted package is removed from the disposable consumer, so tests needing
-board-internal access remain covered by lane 1. Those tests import the board's
-storage, remote-access and test-support packages, plus tagged-test helpers;
-standalone extracted-module test conformance is not established here. A proposed
-future adapter is a reviewed board-owned test-support bridge after the source
-freeze; the current projection continues to run the original private paths with
-an empty adapter table. `consumer` rewrites imports,
-selects/downloads the candidate through a fresh cache and the file proxy, records
-both candidate go.sum lines and the module graph, and refuses a candidate
-replacement or wrong MVS selection. Build and vet then use a separate fresh
-cache, the same file proxy, and no network fallback. The pseudo-version is
-derived from the public snapshot commit's UTC timestamp and revision; it is not
-a released immutable tag. Whole-board CI and the released tag remain Z/C1 work.
-
-Qualified-provider and helper-process skips remain visible with exact reasons;
-Darwin-only confinement exclusions on Linux remain informative. Internal-only
-imports and PTY limits stay visible through the baseline and projection streams
-and inventories. No provider stub, test deletion or implicit adapter is admitted.
-This development proof does not gate the separate Muse-cut freeze.
+The reports below are retained verbatim as historical evidence. Their lane
+descriptions, toolchains, private source inputs, qualifiers and references to
+"current" describe the earlier recorded runs only. Those workflows have been
+removed; none of these reports qualifies the present component selector, its
+Ubuntu/native macOS jobs or the standalone host. The active contract is above.
 
 ## Baseline-equivalence rework evidence
 

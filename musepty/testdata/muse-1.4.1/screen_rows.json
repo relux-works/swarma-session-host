@@ -1,0 +1,312 @@
+{
+ "_note": "Real 1.4.1-R4503.1 echo TUI screens and live-region rows harvested 2026-10-02: quiet snapshots (fresh idle, post turn, post multiline, post goal, post queue-drain) plus stability-filtered (>=3 consecutive 15ms polls) live rows during a delayed run and a queued-input phase. Boundary rows between transcript and composer in these captures ground the screen_rows table in muse_pty_grammar.json.",
+ "screens": [
+  {
+   "name": "fresh_idle",
+   "rows": [
+    "",
+    "  Muse Code 1.4.1",
+    "",
+    "── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────",
+    "❯",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "  echo · ~ · Auto-review",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  {
+   "name": "post_turn",
+   "rows": [
+    "",
+    "  Muse Code 1.4.1",
+    "",
+    "❯ harvest short line",
+    "",
+    "◆ echo: harvest short line",
+    "",
+    "── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────",
+    "❯",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "  echo · ~ · Auto-review",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  {
+   "name": "post_multiline",
+   "rows": [
+    "",
+    "  Muse Code 1.4.1",
+    "",
+    "❯ harvest short line",
+    "",
+    "◆ echo: harvest short line",
+    "",
+    "❯ first harvest line",
+    "  second harvest line that is considerably longer than the first one to force wrapping behavior",
+    "  third",
+    "",
+    "◆ echo: first harvest line",
+    "  second harvest line that is considerably longer than the first one to force wrapping behavior",
+    "  third",
+    "",
+    "── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────",
+    "❯",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "  echo · ~ · Auto-review",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  {
+   "name": "post_goal",
+   "rows": [
+    "",
+    "  Muse Code 1.4.1",
+    "",
+    "❯ harvest short line",
+    "",
+    "◆ echo: harvest short line",
+    "",
+    "❯ first harvest line",
+    "  second harvest line that is considerably longer than the first one to force wrapping behavior",
+    "  third",
+    "",
+    "◆ echo: first harvest line",
+    "  second harvest line that is considerably longer than the first one to force wrapping behavior",
+    "  third",
+    "",
+    "❯ Board goal PRIMARY-GOAL-260725-parity revision 1; state active.",
+    "  Provider condition: Every terminal task-board run notice for this board has been routed (reviewer, checkpoint,",
+    "  integrate, rework, or a persisted blocked packet), and no unblocked, unassigned leaf of the primary goal remains",
+    "  undispatched, or the session is explicitly waiting on a human decision.",
+    "  Objective: Deliver the first alignment objective end to end",
+    "  Budget: none",
+    "  End your turn while waiting, do not poll. If an external decision blocks progress, begin a line with BLOCKED: and name",
+    "  the required decision.",
+    "",
+    "◆ echo: Board goal PRIMARY-GOAL-260725-parity revision 1; state active.",
+    "  Provider condition: Every terminal task-board run notice for this board has been routed (reviewer, checkpoint,",
+    "  integrate, rework, or a persisted blocked packet), and no unblocked, unassigned leaf of the primary goal remains",
+    "  undispatched, or the session is explicitly waiting on a human decision.",
+    "  Objective: Deliver the first alignment objective end to end",
+    "  Budget: none",
+    "  End your turn while waiting, do not poll. If an external decision blocks progress, begin a line with BLOCKED: and name",
+    "  the required decision.",
+    "",
+    "── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────",
+    "❯",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "  echo · ~ · Auto-review",
+    "",
+    "",
+    ""
+   ]
+  },
+  {
+   "name": "post_drain",
+   "rows": [
+    "",
+    "  Muse Code 1.4.1",
+    "",
+    "❯ first harvest",
+    "",
+    "◆ echo: first harvest",
+    "",
+    "❯ second harvest",
+    "",
+    "◆ echo: second harvest",
+    "",
+    "── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────",
+    "❯",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "  echo · ~ · Auto-review",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ]
+  }
+ ],
+ "live_rows": [
+  {
+   "row": "  Muse Code 1.4.1",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◆ Thinking (0s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◆ Thinking (1s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◆ Thinking (2s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◆ Working (0s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◆ echo: harvest delayed line",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◇ Thinking (0s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◇ Thinking (1s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◇ Thinking (2s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◇ Working (0s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◈ Thinking (0s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◈ Thinking (1s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◈ Thinking (2s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "◈ Working (0s · esc to interrupt)",
+   "source": "busy_poll"
+  },
+  {
+   "row": "❯ harvest delayed line",
+   "source": "busy_poll"
+  },
+  {
+   "row": "  ↳ second harvest",
+   "source": "queue_poll"
+  },
+  {
+   "row": "• Queued input",
+   "source": "queue_poll"
+  },
+  {
+   "row": "◆ echo: first harvest",
+   "source": "queue_poll"
+  },
+  {
+   "row": "◇ Working (2s · esc to interrupt)",
+   "source": "queue_poll"
+  },
+  {
+   "row": "❯ first harvest",
+   "source": "queue_poll"
+  }
+ ]
+}

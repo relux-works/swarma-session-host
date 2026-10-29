@@ -1,0 +1,27 @@
+{
+  "env": {
+    "XDG_CACHE_HOME": "/manager/environments/companyA/muse/cache",
+    "XDG_CONFIG_HOME": "/manager/environments/companyA/muse/config",
+    "XDG_DATA_HOME": "/manager/environments/companyA/muse/data",
+    "XDG_STATE_HOME": "/manager/environments/companyA/muse/state",
+    "TBH_CREDENTIAL_BACKEND": "file"
+  },
+  "environment": "muse",
+  "fragment": "launch-env-fragment-v4",
+  "permissions": {
+    "locked": false,
+    "mode": "native",
+    "source": "profile"
+  },
+  "precedence": {
+    "placement": "winner-last",
+    "winner": "higher-weight"
+  },
+  "profile": {
+    "lock_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "name": "companyA"
+  },
+  "credential_store": {
+    "selection": "file"
+  }
+}

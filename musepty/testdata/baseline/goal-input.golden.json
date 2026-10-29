@@ -1,0 +1,22 @@
+[
+  {
+    "operation": "apply",
+    "submitted": "Board goal PRIMARY-GOAL-260725-parity revision 1; state active.\nProvider condition: Every terminal task-board run notice for this board has been routed (reviewer, checkpoint, integrate, rework, or a persisted blocked packet), and no unblocked, unassigned leaf of the primary goal remains undispatched, or the session is explicitly waiting on a human decision.\nObjective: Deliver the first alignment objective end to end\nBudget: none\nEnd your turn while waiting, do not poll. If an external decision blocks progress, begin a line with BLOCKED: and name the required decision."
+  },
+  {
+    "operation": "update",
+    "submitted": "Board goal PRIMARY-GOAL-260725-parity revision 2; state active.\nProvider condition: Every terminal task-board run notice for this board has been routed (reviewer, checkpoint, integrate, rework, or a persisted blocked packet), and no unblocked, unassigned leaf of the primary goal remains undispatched, or the session is explicitly waiting on a human decision.\nObjective: Handle the second realignment objective now\nBudget: none\nEnd your turn while waiting, do not poll. If an external decision blocks progress, begin a line with BLOCKED: and name the required decision."
+  },
+  {
+    "operation": "clear",
+    "submitted": "Board goal PRIMARY-GOAL-260725-parity revision 3; state cleared.\nProvider condition: Every terminal task-board run notice for this board has been routed (reviewer, checkpoint, integrate, rework, or a persisted blocked packet), and no unblocked, unassigned leaf of the primary goal remains undispatched, or the session is explicitly waiting on a human decision.\nObjective: Handle the second realignment objective now\nBudget: none\nEnd your turn while waiting, do not poll. If an external decision blocks progress, begin a line with BLOCKED: and name the required decision."
+  },
+  {
+    "operation": "rollback",
+    "submitted": "Board goal PRIMARY-GOAL-260725-parity revision 1; state active.\nProvider condition: Every terminal task-board run notice for this board has been routed (reviewer, checkpoint, integrate, rework, or a persisted blocked packet), and no unblocked, unassigned leaf of the primary goal remains undispatched, or the session is explicitly waiting on a human decision.\nObjective: Deliver the first alignment objective end to end\nBudget: none\nEnd your turn while waiting, do not poll. If an external decision blocks progress, begin a line with BLOCKED: and name the required decision."
+  },
+  {
+    "operation": "rollback_nil",
+    "submitted": "The board goal binding has been rolled back; reread the authoritative board goal before further work. End your turn while waiting, do not poll."
+  }
+]

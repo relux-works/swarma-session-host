@@ -1,0 +1,4 @@
+{"timestamp":"2026-07-28T20:29:59Z","type":"event_msg","payload":{"type":"token_count","info":{"model_context_window":258400}}}
+{"timestamp":"2026-07-28T20:30:00Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"summary of the dropped conversation"}]}]}}
+{"timestamp":"2026-07-28T20:30:00Z","type":"event_msg","payload":{"type":"context_compacted"}}
+{"timestamp":"2026-07-28T20:30:01Z","type":"event_msg","payload":{"type":"token_count","info":{"model_context_window":258400}}}

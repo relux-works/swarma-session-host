@@ -1,0 +1,12 @@
+
+  Muse Code 1.4.10
+
+  warning: rules file at /home/fix/.claude/CLAUDE.md produced 83620 bytes, over the 65536 byte subagent delegation
+  startup context limit; it will be truncated for this session
+
+  Including your Claude Code personal rules and 6 skills — manage with /settings.
+
+── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  echo · /h/f/ws · Auto-review

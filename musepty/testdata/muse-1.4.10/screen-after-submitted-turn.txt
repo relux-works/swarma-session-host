@@ -1,0 +1,11 @@
+
+  Muse Code 1.4.10
+
+❯ hello qualification
+
+◆ echo: hello qualification
+
+── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────
+❯ Type @ to search and insert workspace file paths
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  echo · /h/f/ws · Auto-review

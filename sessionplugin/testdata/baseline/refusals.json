@@ -1,0 +1,86 @@
+[
+  {
+    "name": "unknown-operation",
+    "operation": "not-an-operation",
+    "request": "{}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"launch_plan_invalid\",\"details\":{}}\n",
+    "exit": 6
+  },
+  {
+    "name": "invalid-describe",
+    "operation": "describe",
+    "request": "{\"extra\":true}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"launch_plan_invalid\",\"details\":{}}\n",
+    "exit": 6
+  },
+  {
+    "name": "missing-launch",
+    "operation": "launch",
+    "request": "{}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"launch_plan_invalid\",\"details\":{}}\n",
+    "exit": 6
+  },
+  {
+    "name": "invalid-status",
+    "operation": "status",
+    "request": "{}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"launch_plan_invalid\",\"details\":{}}\n",
+    "exit": 6
+  },
+  {
+    "name": "provider",
+    "operation": "launch",
+    "request": "{\"admission_key\":null,\"board_goal\":\"none\",\"child_env\":{},\"credential_source\":null,\"cwd\":\"\u003cfixture-cwd\u003e\",\"detach\":true,\"doorbell\":null,\"effort\":null,\"harness_memory\":false,\"labels\":{},\"model\":null,\"native_tail\":[],\"operation_id\":\"00000001-1111-4111-8111-111111111111\",\"permissions\":{\"mode\":\"native\",\"source\":\"flag\"},\"profile\":{\"fragment_digest\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"lock_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"name\":\"sample\"},\"runtime\":\"muse\",\"sandbox\":{\"mode\":\"none\",\"writable_roots\":[]},\"service_tier\":null,\"session_name\":\"example\",\"submitted_at\":\"2026-10-19T00:00:00Z\",\"system_prompt\":null,\"weights_id\":null}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"session_host_provider_unsupported\",\"details\":{\"environment\":\"muse\"}}\n",
+    "exit": 6
+  },
+  {
+    "name": "doorbell",
+    "operation": "launch",
+    "request": "{\"admission_key\":null,\"board_goal\":\"none\",\"child_env\":{},\"credential_source\":null,\"cwd\":\"\u003cfixture-cwd\u003e\",\"detach\":true,\"doorbell\":{\"heartbeat\":\"30s\",\"identity\":\"example\",\"max_wakes_per_hour\":1},\"effort\":null,\"harness_memory\":false,\"labels\":{},\"model\":null,\"native_tail\":[],\"operation_id\":\"00000001-1111-4111-8111-111111111111\",\"permissions\":{\"mode\":\"native\",\"source\":\"flag\"},\"profile\":{\"fragment_digest\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"lock_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"name\":\"sample\"},\"runtime\":\"codex_cli\",\"sandbox\":{\"mode\":\"none\",\"writable_roots\":[]},\"service_tier\":null,\"session_name\":\"example\",\"submitted_at\":\"2026-10-19T00:00:00Z\",\"system_prompt\":null,\"weights_id\":null}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"session_host_capability_missing\",\"details\":{\"capability\":\"doorbell-codex/1\"}}\n",
+    "exit": 6
+  },
+  {
+    "name": "secret",
+    "operation": "launch",
+    "request": "{\"admission_key\":null,\"board_goal\":\"none\",\"child_env\":{\"API_TOKEN\":\"fixture-placeholder\"},\"credential_source\":null,\"cwd\":\"\u003cfixture-cwd\u003e\",\"detach\":true,\"doorbell\":null,\"effort\":null,\"harness_memory\":false,\"labels\":{},\"model\":null,\"native_tail\":[],\"operation_id\":\"00000001-1111-4111-8111-111111111111\",\"permissions\":{\"mode\":\"native\",\"source\":\"flag\"},\"profile\":{\"fragment_digest\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"lock_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"name\":\"sample\"},\"runtime\":\"codex_cli\",\"sandbox\":{\"mode\":\"none\",\"writable_roots\":[]},\"service_tier\":null,\"session_name\":\"example\",\"submitted_at\":\"2026-10-19T00:00:00Z\",\"system_prompt\":null,\"weights_id\":null}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"secret_policy_violation\",\"details\":{}}\n",
+    "exit": 16
+  },
+  {
+    "name": "selector-tail",
+    "operation": "launch",
+    "request": "{\"admission_key\":null,\"board_goal\":\"none\",\"child_env\":{},\"credential_source\":null,\"cwd\":\"\u003cfixture-cwd\u003e\",\"detach\":true,\"doorbell\":null,\"effort\":null,\"harness_memory\":false,\"labels\":{},\"model\":null,\"native_tail\":[\"--resume\",\"example\"],\"operation_id\":\"00000001-1111-4111-8111-111111111111\",\"permissions\":{\"mode\":\"native\",\"source\":\"flag\"},\"profile\":{\"fragment_digest\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"lock_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"name\":\"sample\"},\"runtime\":\"codex_cli\",\"sandbox\":{\"mode\":\"none\",\"writable_roots\":[]},\"service_tier\":null,\"session_name\":\"example\",\"submitted_at\":\"2026-10-19T00:00:00Z\",\"system_prompt\":null,\"weights_id\":null}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"launch_plan_invalid\",\"details\":{}}\n",
+    "exit": 6
+  },
+  {
+    "name": "valid-detail",
+    "operation": "refusal-constructor",
+    "request": "{\"code\":\"session_host_capability_missing\",\"details\":{\"capability\":\"weights-pin\"}}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"session_host_capability_missing\",\"details\":{\"capability\":\"weights-pin\"}}\n",
+    "exit": 6
+  },
+  {
+    "name": "unknown-code",
+    "operation": "refusal-constructor",
+    "request": "{\"code\":\"unknown-fixture-code\",\"details\":null}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"session_host_unavailable\",\"details\":{}}\n",
+    "exit": 1
+  },
+  {
+    "name": "launcher-local-code",
+    "operation": "refusal-constructor",
+    "request": "{\"code\":\"session_manager_registry_invalid\",\"details\":null}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"session_host_unavailable\",\"details\":{}}\n",
+    "exit": 1
+  },
+  {
+    "name": "free-detail",
+    "operation": "refusal-constructor",
+    "request": "{\"code\":\"werkstatt_busy\",\"details\":{\"state\":\"PRIVATE-FIXTURE-CANARY\"}}",
+    "response": "{\"protocol\":\"curator-session-manager/1\",\"ok\":false,\"code\":\"session_host_unavailable\",\"details\":{}}\n",
+    "exit": 1
+  }
+]

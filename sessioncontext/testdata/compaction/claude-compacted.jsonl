@@ -1,0 +1,3 @@
+{"type":"user","timestamp":"2026-07-28T20:29:59Z","message":{"content":"before"}}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-07-28T20:30:00Z","compactMetadata":{"trigger":"auto","preTokens":468493,"postTokens":14997,"cumulativeDroppedTokens":453496}}
+{"type":"assistant","timestamp":"2026-07-28T20:30:01Z","message":{"content":"after"}}

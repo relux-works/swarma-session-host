@@ -1,0 +1,11 @@
+[
+  {
+    "module": ".",
+    "package": "./musepty",
+    "tests": [
+      "TestMusePTYL3PNarrowingMutants",
+      "TestMusePTYNarrowingMutants",
+      "TestMusePTYWriterNarrowingMutants"
+    ]
+  }
+]

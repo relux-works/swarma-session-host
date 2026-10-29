@@ -1,0 +1,67 @@
+{
+  "contract": "task-board-session-record-v3",
+  "session_id": "SES-BGJfrloZ47wqmtfSBXDu3Q1Y",
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "provider": "codex",
+  "state": "stopped",
+  "liveness": "live",
+  "liveness_detail": "loaded provider host is live",
+  "provider_host": {
+    "provider": "codex",
+    "opaque": {
+      "process_identity": {
+        "pid": 101,
+        "uid": 1000,
+        "start": "birth-identity",
+        "pgid": 101
+      },
+      "goal_token_budget": 42,
+      "contract": "task-board.codex-provider-host-v1",
+      "pid": 101,
+      "url": "ws://127.0.0.1:1234/",
+      "thread_id": "native-thread",
+      "executable": "/bin/codex",
+      "project_dir": "/workspace/fixtures/004",
+      "codex_home": "/workspace/fixtures/005",
+      "host_argv": [
+        "app-server",
+        "--listen",
+        "ws://127.0.0.1:1234"
+      ],
+      "managed_client_argv": [],
+      "log_path": "/workspace/fixtures/006/host.log",
+      "auto_continue": {
+        "enabled": true,
+        "delay_seconds": 3,
+        "max_nudges_per_turn": 2,
+        "prompt": "continue"
+      },
+      "owner_run": {
+        "run_id": "RUN-X",
+        "task_id": "legacy-element",
+        "delivery_goal_id": "GOAL-X"
+      },
+      "forked_from_id": "parent-native",
+      "provider_version": "version",
+      "base_rollout_sha256": "rollout",
+      "inherited_last_turn_id": "inherited-turn",
+      "inherited_rollout": {
+        "bytes": 73,
+        "sha256": "prefix-hash"
+      },
+      "managed_turn_id": "managed-turn",
+      "pending_goal_directive": "private directive",
+      "last_completed_turn_id": "last-turn",
+      "adopted": true,
+      "tool_policy": {
+        "sandbox": "read-only",
+        "approval": "never"
+      }
+    }
+  },
+  "created_at": "2026-10-24T19:16:05.674285859Z",
+  "updated_at": "2026-10-24T19:16:05.674297571Z"
+}

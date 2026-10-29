@@ -1,21 +1,102 @@
 # swarma-session-host
 
-The session host keeps agent sessions running in the background: it starts a harness (Claude Code, Codex, Muse) in a given directory, lets a person attach and detach, delivers messages into a running session, and reports what happens. A goal is optional. The module must work without goals, a board, an orchestrator or their toolchain; task-board is an optional client of its generic goal interface. Today this job is done by the board's in-tree session package (private source). This repository is where it becomes its own module.
+The session host provides provider runtimes for Codex, Claude Code and Muse, plus authenticated local control transport, session records, attachment lifecycle and client transport. It is a standalone Go module. Board packages are not runtime dependencies.
 
-**Revision:** accepted architecture-review findings (2026-10-13): complete signed-intent retry binding, retained producer/aggregate storage accounting with protected control reserve, positive placement/role eligibility and inert exact-candidate review. Optional reviewer policies remain unchosen and off; publication and qualification remain gates (§§3.1–3.5, 3.7; §7.19–22).
+## Implementation status
 
-**Revision:** accepted architecture-review findings (2026-10-13): protected exec-policy pins and input qualification, mode-aware transfer and bounded cleanup/repair, v0 watcher/status-only alerts and direct node-stop progress. Publication and qualification remain gates; v1 freeze and optional standing discard remain open.
+The source assembly includes `sessionmanager`, `sessiongoal`, `sessionbudget`, `sessioncontext`, `musepty`, `sessionplugin`, `sessionclient`, `musebuilds` and `hostdefaults`. Provider launch payloads use the shared typed contract; foreign and ambiguous payloads are refused before provider I/O. Original tests are preserved alongside additional boundary tests; their presence alone does not claim complete test parity.
 
-**Revision:** wave 5b (2026-10-13): web default-off, trusted-circle opt-ins and task resources; corrected stop/write-fence figures and hosted-launch r6 input.
+`cmd/tb-sessiond` now composes the actual host, durable goal/accounting/context services, provider factories, captured owner renderer and authenticated control server. Its default has no external exact-session authority registrar or full legacy revision proof, so those operations remain fail-closed; this is not complete standalone acceptance. `hostdefaults.FileConfig` supplies explicit file-backed configuration. `sessionmanager.NewSessionNoticeStore` supplies the original structured notice queue, and the real host delivery pump acknowledges successfully delivered bursts. `NewLegacyRecordCodec` preserves original record images and provider subrecords; active native accounting restoration still requires its real runtime supplier. `hostdefaults.NewMaterializationHostCodec` connects that decoder to the context catalog while retaining cancellation and unsupported-state refusals.
 
-**Status: design.** No code has been moved yet. The plan is in [`spec/session-host.md`](spec/session-host.md):
+`NewProtocol8Handler` supplies physical session routes for the authenticated `NewControlServer`. Captured owner runs use `sessionrun` through the core host. The actual core takeover and doctor paths are composed. Status reads the real context catalog and quarantine inventory; the legacy goal descriptor remains absent until an enforcing validator is bound. Legacy launch conversion and complete active restoration still require their exact source closure. `sessiongoal` supplies the durable goal journal and binding factory; `sessioncontext` supplies the context catalog, recovery, retention and materialization engine. Their production authority, observation, native accounting, provider materialization and fork-validation suppliers remain required. See [the exact composition boundaries](UNRESOLVED_QUESTIONS.md). Building these components is not evidence that a complete daemon can serve the existing capability set.
 
-1. **Extraction as it is (SH1).** The provider hosts (Claude PTY, Codex app-server, Muse), the goal and notice delivery, transcripts, records and the daemon skeleton move here with no change in behaviour; task-board reaches them through a thin seam; task-board's existing session, goal and notice suites are the gate.
-2. **Platform canons (SH2+).** Then the host is brought to the platform's rules: the `swarma-session-host` service owns durable state, fences and input admission; one `swarma-session-runner` per session owns the PTY master or private Codex app-server transport under `worker-<label>`, started by `swarma-user-launcher` through `swarma-dispatcher`. The dispatcher stops executions through `swarma-user-manager`'s `exec.stop`. Peer credentials, per-session capabilities, parking and controlled restart are activation gates.
+Goal authority belongs to the launcher of record and an authorized operator. Assignment goals and a session's working goals are distinct. Durable source envelopes, holder revisions and old-holder refusal are required; a provider banner or process exit cannot accept a goal. Identity binding stays on the raising side until a named replacement exists. These requirements do not introduce a board callback or board runtime dependency.
 
-For now, only the board/orchestrator for board goals, or the launching caller at start through the launcher, authors a session goal. The agent account has no goal capability on the host socket. This keeps authorship with the initiating caller while the bounds of an agent namespace await design. A separate SH2+ item will choose between agent self-goals in a separate namespace and retaining caller/board authorship only; this does not block a goal-free host.
+## Standalone command
 
-The host-socket goal-client actions and capability shape remain unpublished. The per-session nudge or wake budget source and its default without a board are unspecified, as is an agent "done" proposal path without a board. With a board, an agent outcome is only a proposal to the board owner; any future proposal path must not mutate a goal (D-GOALS). See spec §3.8 and §7.
+Build the retained executable entry point with `go build -o .temp/tb-sessiond ./cmd/tb-sessiond`.
+Run `.temp/tb-sessiond --state-root /absolute/private/state --namespace selected --config /absolute/host-config.json`.
+Omit `--config` only to use the optional `config.json` inside the selected state root.
+`--socket-path /absolute/private/control.sock` permits a shorter Unix socket location.
+`--version` prints build metadata without opening runtime state. The foreground command
+uses the existing shutdown signal watch and the core server's recovery, authentication,
+self-check and joined shutdown. It does not discover or load a board.
+
+`hostdefaults.OpenStandalone` accepts the genuine external goal authority, retained
+legacy source and context supplier ports. It installs the concrete full legacy
+validator/proof over that source; the default source remains absent. The command currently has no raising-side
+registrar for those sources. Owner strings, request PIDs and a shared OS user never
+supply grants. Assignment and working heads remain distinct; native completion does
+not accept either. Legacy attach conversion and active native restoration remain
+open source boundaries, as listed in `UNRESOLVED_QUESTIONS.md`.
+
+## Tools
+
+Use Go 1.26.8 with `GOTOOLCHAIN=local`, `GOWORK=off` and `GOFLAGS=-mod=readonly`.
+The component CI runs these commands on Ubuntu and native macOS; both jobs gate:
+
+```sh
+export GOTOOLCHAIN=local GOWORK=off GOFLAGS=-mod=readonly
+# Use a short, owned directory for Unix-socket fixtures on either platform.
+SESSIONHOST_TEST_SOCKET_ROOT=$(mktemp -d /tmp/sh1.XXXXXX)
+export SESSIONHOST_TEST_SOCKET_ROOT
+chmod 700 "$SESSIONHOST_TEST_SOCKET_ROOT"
+umask 022
+go mod verify
+go build -p=1 ./...
+go vet -p=1 ./...
+go test -p=1 -parallel=1 -count=1 ./...
+rmdir "$SESSIONHOST_TEST_SOCKET_ROOT"
+```
+
+The suite includes every package in this module, including the goal, context, budget, defaults and command packages, without a test-name filter.
+
+The separate Linux `codex-source-race` workflow preserves the source-replacement
+and concurrent-uncertainty reviewer regressions under the race detector. With
+the same owned socket fixture directory, it runs independently of the full suite:
+
+```sh
+CGO_ENABLED=1 GOMAXPROCS=2 go test -v -race -p=1 -parallel=1 -count=1 -timeout=180s ./sessionmanager -run '^(TestRev5BImageReplacedDuringRead|TestRev5BConcurrentUncertaintyPublication)$'
+```
+
+These are bounded fixture checks; they do not waive a failing full suite.
+Their output goes to the CI log; retain local logs under `.temp/`.
+`umask 022` matches the executable-mode fixtures; the socket setting affects
+fixtures only. Provider smokes, opt-in mutation suites and platform-specific tests
+retain their own prerequisites and explicit skips. These jobs do not establish
+live-provider, complete standalone-host or Curator acceptance.
+
+`hostdefaults.FileConfig` reads an explicit selected file with the existing `session_manager.providers` settings and context policy fields. Only an optional missing default file uses the former 30-second acknowledgement timeout, sleep enabled and 50,000,000-token default; invalid explicit settings refuse. `Load` retains Codex launch defaults, validated optional retention knobs and their original bytes. The standalone constructor binds this actual file source to the context service. `ConfiguredContextRetentionSweep` resolves all nine fields before forming a whole sweep request and propagates source errors before effects. Explicit HTTP sweep requests keep their original independent policy semantics. The public unbound `FileConfig.Snapshot` still refuses configured retention. See [`hostdefaults`](hostdefaults/README.md) for the exact boundary.
+
+`sessionmanager.NewSessionNoticeStore` wraps the original durable inbox without changing its JSON. Pending notices retain the complete structured payload for whole-burst rendering. Receipt IDs name readable queue files, and acknowledgement refuses changed or unissued receipts. The real host delivery pump acknowledges successfully delivered structured bursts. The standalone constructor binds this store; unit queue qualification is not daemon readiness.
+
+`gofmt -l` reports formatting drift. `go mod tidy` updates module manifests from the actual source graph; `go mod verify` checks downloaded module contents. These commands write only the normal Go caches unless an output path is supplied. Put local logs and temporary artifacts under `.temp/`.
+
+The historical extraction tools under `tools/sh1` and their fixture remain documented in [`docs/sh1-gate.md`](docs/sh1-gate.md). They do not establish standalone runtime qualification. Public component CI uses only this module.
+
+Python 3's standard-library witness checks the full command and explicit
+workflow/job/step `GOFLAGS` declarations, accepting only single-line literal
+`-mod=readonly`. Deeper continuation lines refuse, including across blank or
+comment lines.
+It does not run component tests or verify arbitrary scripts, `if` guards or
+`continue-on-error`:
+
+```sh
+python3 -m unittest discover -s tools/sh1/ci -p 'test_component_selection.py' -v
+```
+
+`gofmt -l` reports formatting drift. `go mod tidy` updates module manifests from
+the actual source graph; `go mod verify` checks downloaded module contents.
+Commands write to stdout/stderr and the normal Go caches unless overridden.
+Put local logs, list inventories and temporary artifacts under `.temp/`.
+
+The historical extraction CLI under `tools/sh1` and the separate tooling CI are
+documented in [`docs/sh1-gate.md`](docs/sh1-gate.md). Public component CI uses
+only this module; it has no private checkout or private authentication input.
+
+## Design references
+
+The existing [design specification](spec/session-host.md) and figures include earlier extraction and future platform proposals. They require alignment with the standalone composition and goal authority described above; their former board composition path is not an active runtime dependency.
 
 In the gated SH2+ launch path (R-START/R-SESSION), the owner's admitted start can carry **session lifecycle authorisation** for successors; its member format is unpublished. The dispatcher owns a durable **host admission permit** for one `logical_session_id`. Every physical start has its own `(execution_id, controller_epoch, op_id)` claim, fence and same-effect/root-receipt interlock. The host prepares durable intent and a closed fence, then sends `host_start` in `dispatch-op/1` with the four fixed request values. Only the dispatcher invokes `swarma-user-launcher`. Successors require the owner's lifecycle authorisation, an active owner and fresh authority checks, confirmed absence of the previous claim, the same allocation/generation and unchanged stored plan; replay of `(logical_session_id, op_id)` returns the same successor. A one-start request admits no successor. The host gains no caller chain or spawn/lease grant; the original owner's ancestry remains. Ordinary successors cannot extend allocation lifetime or reset runtime budgets (§3.3).
 
@@ -42,23 +123,6 @@ For gated SH2+, the unchanged `(principal, id)` claim stores/compares complete c
 Design input: [hosted-launch contract r6 harvest](docs/inputs/hosted-launch-contract-r6.md), from agent-session-host PR #10 at its recorded head. Its task-board receiver is superseded by the swarma dispatcher path; the retained seam, admission-record and imported-Claude notes are input, not an activated contract.
 
 Related modules: [swarma-dispatcher](https://github.com/relux-works/swarma-dispatcher), [swarma-user-manager](https://github.com/relux-works/swarma-user-manager), [swarma-credential-broker](https://github.com/relux-works/swarma-credential-broker), [curator-agent-launcher](https://github.com/relux-works/curator-agent-launcher) (`curator-run`), [agent-session-bridge](https://github.com/relux-works/agent-session-bridge).
-
-The generic SH1 gate tools and invented fixture are documented in
-[`docs/sh1-gate.md`](docs/sh1-gate.md). Public CI exercises the tooling on
-GitHub-hosted macOS and Ubuntu. Lane 1 runs in public module CI with a private,
-pinned board checkout; the owner accepted board code excerpts in public CI logs
-on 2026-10-10. The current public lane 2 prototype builds and vets the consumer
-through a file GOPROXY; the release gate requires the full private board CI
-against an immutable public module tag, without a candidate replacement. Lane 3
-tooling checks are distinct from future extracted-module conformance. The gate
-records failures and never hides skips; see the evidence and declared constraints
-in the gate document. No test or build runs on the development host.
-
-Through C1 the board will consume the tagged public serving library while
-retaining the `tb-sessiond` executable and composition root. This module's
-private-fork cutover plan is superseded; the existing tooling does not establish
-extraction or runtime migration. Operator maintenance, quiescence and paired
-release identities remain required.
 
 The [figure index](diagrams/README.md) maps audit rows M-SH1–M-SH4 and the R-LOCK view M-SH5 to their
 PlantUML sources and defining spec sections:
@@ -103,8 +167,27 @@ TASK_BOARD_MUSE_RUN_MUTANTS=1 go test -tags mutants -run '^TestMuseBuildsNarrowi
 
 ## Provenance
 
-Code will move here as a snapshot of the board's in-tree session package (private source) at a pinned private source commit (Apache-2.0), without the source repository's history. Each move will record its exact source pin in the private fork's provenance record. The NOTICE will keep the original attribution.
+Relocated components retain their original Apache-2.0 attribution and tests. The NOTICE preserves the original attribution. Source revisions and validation evidence are recorded with each integration candidate.
 
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE) for licensing and attribution.
+
+
+The same built `tb-sessiond` implements the original internal
+`session context-gateway-shim` argv used by provider MCP configuration. The
+command selects its own concrete executable and supplies the exact shim argv to
+`OpenStandalone`; the runtime library requires explicit command selection.
+Gateway endpoint/authentication comes from the existing provider-specific
+`TASK_BOARD_BUILDER_GATEWAY_SOCKET` and `TASK_BOARD_BUILDER_GATEWAY_TOKEN`
+environment, not daemon credentials. MCP responses go to stdout. The shim
+creates no host or board and retains ordinary child-process signal behavior.
+
+`OpenStandalone` binds the same concrete builder gateway runtime to the context
+service when a shim is selected. Explicit `Standalone.Close` joins its owned
+surfaces and preserves missing-native-proof errors. Provider Start/Bind and the
+core server's pre-observation-close ordering still require their real owning
+source; default construction is not a claim that native completeness or a
+canonical signed publication issuer exists. Active PTY revision delivery now
+uses the actual owner runtime with the same budget/service supplier; native
+accounting restore and deferred Codex owner continuation retain their guards.

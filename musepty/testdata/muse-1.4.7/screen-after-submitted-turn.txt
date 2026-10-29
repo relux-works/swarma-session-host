@@ -1,0 +1,40 @@
+
+  Muse Code 1.4.7
+
+  Including your Claude Code personal rules and 6 skills — manage with /settings.
+
+❯ harvest probe line
+
+◆ echo: harvest probe line
+
+── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────
+❯ Type @ to search and insert workspace file paths
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  echo · ~/ws · Auto-review
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

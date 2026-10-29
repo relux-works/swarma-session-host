@@ -1,0 +1,65 @@
+{
+  "_note": "Sanitized Muse 1.4.7-R6101.1 Echo capture witnesses. The composer text in screen.txt was not submitted. tmux-noflag-01 is a trust dialog and must refuse. All screens are 120 columns.",
+  "screens": [
+    {
+      "name": "unsubmitted_composer",
+      "rows": [
+        "",
+        "  Muse Code 1.4.7",
+        "",
+        "  Including your Claude Code personal rules and 6 skills — manage with /settings.",
+        "",
+        "── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────",
+        "❯ harvest probe line",
+        "",
+        "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "  echo · ~/ws · Auto-review"
+      ]
+    },
+    {
+      "name": "tmux-flag-01",
+      "rows": [
+        "  Muse Code 1.4.7",
+        "  Including your Claude Code personal rules and 6 skills — manage with /settings.",
+        "── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────",
+        "❯",
+        "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "  echo · /home/fixture/ws · Auto-review"
+      ]
+    },
+    {
+      "name": "tmux-git-root-01",
+      "rows": [
+        "  Muse Code 1.4.7",
+        "  Including your Claude Code personal rules and 6 skills — manage with /settings.",
+        "── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────",
+        "❯",
+        "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "  echo · /home/fixture/ws · Auto-review"
+      ]
+    },
+    {
+      "name": "tmux-git-sub-01",
+      "rows": [
+        "  Muse Code 1.4.7",
+        "  Including your Claude Code personal rules and 6 skills — manage with /settings.",
+        "── Voice input (⌥ + v to start) ────────────────────────────────────────────────────────────────────────────────────────",
+        "❯",
+        "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "  echo · /home/fixture/ws · Auto-review"
+      ]
+    },
+    {
+      "name": "tmux-noflag-01",
+      "rows": [
+        "Do you trust this workspace?",
+        "Workspace: /home/fixture/ws",
+        "Trusting allows project-local skills, rules, hooks, and plugin config to load before the model runs.",
+        "Only trust this workspace when you trust its contents.",
+        "⟩ 1  Trust and continue",
+        "  2  Quit",
+        "Use Up/Down or 1/2, then Enter. Esc quits."
+      ]
+    }
+  ]
+}

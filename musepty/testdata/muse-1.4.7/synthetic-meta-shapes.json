@@ -1,0 +1,984 @@
+[
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "session.workspace_branch.observed",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "workspace_branch",
+      "record": {
+        "command_id": "00000000-0000-4000-8000-000000000001",
+        "workspace_root": "/home/fixture/ws",
+        "reference": {
+          "kind": "branch",
+          "name": "synthetic"
+        },
+        "vcs": "git",
+        "commit": "synthetic"
+      }
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "security_mode",
+      "event": {
+        "approval": "synthetic",
+        "sandbox": "synthetic",
+        "effective_mode": "synthetic",
+        "source": "synthetic"
+      }
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": "00000000-0000-4000-8000-000000000001",
+    "payload_type": "run.model.configured",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run_model",
+      "record": {
+        "command_id": "00000000-0000-4000-8000-000000000001",
+        "run_stream": {
+          "kind": "run",
+          "id": "00000000-0000-4000-8000-000000000001"
+        },
+        "provider_id": "synthetic",
+        "profile_id": "synthetic",
+        "model_id": "synthetic",
+        "display_label": "synthetic",
+        "source": "synthetic"
+      }
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": "00000000-0000-4000-8000-000000000001",
+    "payload_type": "session.workspace_branch.observed",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "workspace_branch",
+      "record": {
+        "command_id": "00000000-0000-4000-8000-000000000001",
+        "workspace_root": "/home/fixture/ws",
+        "reference": {
+          "kind": "branch",
+          "name": "synthetic"
+        },
+        "vcs": "git",
+        "commit": "synthetic"
+      }
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "model_request_configured",
+        "delegation_posture": {
+          "state": "synthetic"
+        },
+        "base_instructions": "synthetic",
+        "base_instructions_source": "synthetic",
+        "instructions_option_key": "synthetic",
+        "toolset": {
+          "source": "synthetic",
+          "mode": "synthetic",
+          "active_tools": [
+            "synthetic"
+          ]
+        },
+        "reminder_roster": {
+          "source": "synthetic",
+          "preset": "synthetic",
+          "agents": [
+            {
+              "id": "goal-reminder",
+              "duty": "Perform the synthetic fixture reminder duty.",
+              "model": "synthetic",
+              "preset": "synthetic",
+              "permission_boundary": "synthetic",
+              "tools": [],
+              "reasoning_effort": "synthetic"
+            },
+            {
+              "id": "synthetic",
+              "duty": "Perform the synthetic fixture reminder duty.",
+              "model": "synthetic",
+              "preset": "synthetic",
+              "permission_boundary": "synthetic",
+              "max_priority": "synthetic",
+              "tools": [],
+              "reasoning_effort": "synthetic",
+              "interval_steps": 1
+            },
+            {
+              "id": "goal-reminder",
+              "duty": "Perform the synthetic fixture reminder duty.",
+              "model": "synthetic",
+              "preset": "synthetic",
+              "permission_boundary": "synthetic",
+              "default_priority": "synthetic",
+              "tools": [],
+              "max_installs_per_run": 1,
+              "blocking": false,
+              "reasoning_effort": "synthetic",
+              "working_status_label": "synthetic"
+            }
+          ]
+        },
+        "run_context_messages": [
+          {
+            "id": "rules_file",
+            "role": "synthetic",
+            "source": "synthetic",
+            "lifecycle": "synthetic",
+            "order": 1,
+            "text": "<system-reminder source=\"synthetic\">Synthetic fixture context.</system-reminder>"
+          },
+          {
+            "id": "rules_file",
+            "role": "synthetic",
+            "source": "synthetic",
+            "lifecycle": "synthetic",
+            "order": 1,
+            "rules_authorization_blocks": [
+              {
+                "scope": "synthetic",
+                "source_kind": "synthetic",
+                "canonical_order": 1,
+                "text_byte_start": 117,
+                "text_byte_end": 141,
+                "content_digest": "sha256:e4f6cb547081dff9073ee82e5923c64e2756e39693e5153047835495b832c0a7",
+                "workspace_scope_digest": "sha256:0d7dd1a08f3a0f62112130323d0eee6c664e6cda4758511b9a4c365dd22a0008",
+                "trust_admitted": false
+              }
+            ],
+            "text": "<system-reminder source=\"synthetic\"><rules-file scope=\"user\" path=\"/home/fixture/rules.md\" written-for=\"Claude Code\">Synthetic fixture rules.</rules-file></system-reminder>"
+          }
+        ]
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "model_input_trace_recorded",
+        "schema_version": 2,
+        "scope": "synthetic",
+        "model_step": 1,
+        "request_record_id": "00000000-0000-4000-8000-000000000001",
+        "provider_family": "synthetic",
+        "request_prefix_message_count": 1,
+        "request_message_count": 1,
+        "bounded": {
+          "request_digest": "synthetic",
+          "external_history_present": false,
+          "current_user_message_count": 1,
+          "current_user_message_bytes": 1,
+          "total_lane_count": 1,
+          "total_lane_bytes": 1,
+          "aggregates": [
+            {
+              "logical_lane": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "source": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "provider_wire_destination": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "lane_count": 1,
+              "byte_count": 1
+            }
+          ],
+          "total_aggregate_group_count": 1,
+          "omitted_aggregate_group_count": 1,
+          "omitted_aggregate_lane_count": 1,
+          "omitted_aggregate_lane_bytes": 1,
+          "head_samples": [
+            {
+              "logical_lane": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "source": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "provider_wire_destination": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "byte_count": 1,
+              "record_id": "00000000-0000-4000-8000-000000000001"
+            },
+            {
+              "logical_lane": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "source": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "provider_wire_destination": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "byte_count": 1,
+              "record_id": "00000000-0000-4000-8000-000000000001",
+              "message_index": 1
+            }
+          ],
+          "tail_samples": [
+            {
+              "logical_lane": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "source": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "provider_wire_destination": {
+                "value": "synthetic",
+                "omitted_bytes": 1
+              },
+              "byte_count": 1,
+              "record_id": "00000000-0000-4000-8000-000000000001"
+            }
+          ],
+          "omitted_sample_lane_count": 1
+        }
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "task",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "task_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "status",
+        "task_id": "00000000-0000-4000-8000-000000000001",
+        "message": "synthetic",
+        "details": {
+          "phase": "synthetic",
+          "facets": [
+            {
+              "kind": "external_attempt",
+              "system": "synthetic",
+              "operation": "synthetic",
+              "attempt": 1,
+              "max_attempts": 1
+            },
+            {
+              "kind": "producer",
+              "detail": {
+                "kind": "provider",
+                "provider": "synthetic"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "reasoning_summary_delta",
+        "text": "synthetic",
+        "summary_index": 1,
+        "message_id": "00000000-0000-4000-8000-000000000001"
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "reasoning_summary_committed",
+        "message_id": "00000000-0000-4000-8000-000000000001",
+        "response_id": "resp_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "text": "synthetic",
+        "provider_item_id": "synthetic"
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "task",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "task_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "status",
+        "task_id": "00000000-0000-4000-8000-000000000001",
+        "message": "synthetic",
+        "details": {
+          "phase": "synthetic",
+          "facets": [
+            {
+              "kind": "external_attempt",
+              "system": "synthetic",
+              "operation": "synthetic",
+              "attempt": 1,
+              "max_attempts": 1,
+              "error_kind": "synthetic"
+            },
+            {
+              "kind": "producer",
+              "detail": {
+                "kind": "provider",
+                "provider": "synthetic",
+                "request_id": "00000000-0000-4000-8000-000000000001",
+                "response_id": "resp_aaaaaaaaaaaaaaaaaaaaaaaa",
+                "model": "synthetic",
+                "stream": {
+                  "bytes_read": 1,
+                  "wire_events_seen": 1,
+                  "last_wire_event_type": "synthetic",
+                  "eof": false,
+                  "eof_buffer_len": 1,
+                  "time_to_first_event_ms": 1,
+                  "bytes_before_first_event": 1
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "assistant_tool_calls_committed",
+        "message_id": "00000000-0000-4000-8000-000000000001",
+        "response_id": "resp_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "tool_calls": [
+          {
+            "id": "synthetic",
+            "call_id": "synthetic",
+            "name": "synthetic",
+            "args": "synthetic"
+          }
+        ]
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "task_stream_linked",
+        "task_id": "00000000-0000-4000-8000-000000000001",
+        "task_stream": {
+          "kind": "task",
+          "id": "00000000-0000-4000-8000-000000000001"
+        },
+        "execution_mode": "synthetic",
+        "display": {
+          "prompt_preview": "synthetic"
+        }
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "tool_batch.effect.started",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "tool_batch_effect",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "record": {
+        "kind": "started",
+        "effect_id": "00000000-0000-4000-8000-000000000001",
+        "model_call_index": 1,
+        "task_id": "00000000-0000-4000-8000-000000000001",
+        "task_stream": {
+          "kind": "task",
+          "id": "00000000-0000-4000-8000-000000000001"
+        },
+        "call_id": "synthetic",
+        "tool_name": "synthetic",
+        "parallel_profile": {
+          "kind": "ineligible"
+        }
+      }
+    }
+  },
+  {
+    "retained_marker": "omitted_live_only",
+    "schema_version": 1,
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "position": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "sequence": 1
+    },
+    "omitted_record": {
+      "record_type": "status",
+      "durability": "ephemeral",
+      "payload_type": "runtime.session",
+      "payload_schema_version": 1,
+      "payload_kind": "task",
+      "omission_class": "task_tool_delta_v1"
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "task",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "task_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "status",
+        "task_id": "00000000-0000-4000-8000-000000000001",
+        "message": "synthetic",
+        "details": {
+          "facets": [
+            {
+              "kind": "producer",
+              "detail": {
+                "kind": "custom",
+                "producer": "synthetic",
+                "fields": {
+                  "produced_bytes": "synthetic",
+                  "retained_bytes": "synthetic",
+                  "truncated": "synthetic"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "tool_batch.effect.terminal",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "tool_batch_effect",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "record": {
+        "kind": "terminal",
+        "effect_id": "00000000-0000-4000-8000-000000000001",
+        "model_call_index": 1,
+        "task_id": "00000000-0000-4000-8000-000000000001",
+        "task_stream": {
+          "kind": "task",
+          "id": "00000000-0000-4000-8000-000000000001"
+        },
+        "call_id": "synthetic",
+        "outcome": {
+          "kind": "completed",
+          "task_completion": {
+            "kind": "terminal",
+            "terminal": {
+              "kind": "completed"
+            }
+          },
+          "output_ref_count": 1
+        }
+      }
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "task",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "task_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "output",
+        "task_id": "00000000-0000-4000-8000-000000000001",
+        "chunk": "synthetic",
+        "final_result": false
+      }
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "tool_result_batch_committed",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "results": [
+          {
+            "tool_call_index": 1,
+            "tool_call_id": "synthetic",
+            "text": "synthetic"
+          }
+        ]
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "context_block_updated",
+        "id": "rules_file",
+        "role": "synthetic",
+        "source": "synthetic",
+        "lifecycle": "synthetic",
+        "order": 1,
+        "text": "synthetic",
+        "reason": "synthetic"
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "reminder_proposal",
+        "command_id": "00000000-0000-4000-8000-000000000001",
+        "round_id": "00000000-0000-4000-8000-000000000001",
+        "reminder_agent_id": "goal-reminder",
+        "generation_id": 1,
+        "snapshot_sequence": 1,
+        "reminder_kind": "synthetic",
+        "subject_key": "synthetic",
+        "advisory_text": "synthetic",
+        "decision_reason": "synthetic",
+        "decision_run_stream": {
+          "kind": "run",
+          "id": "00000000-0000-4000-8000-000000000001"
+        },
+        "decision_call_id": "synthetic",
+        "requested_priority": "synthetic",
+        "effective_priority": "synthetic",
+        "estimated_tokens": 1
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": "00000000-0000-4000-8000-000000000001",
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "skill_reminder_decision",
+        "decision_id": "00000000-0000-4000-8000-000000000001",
+        "reminder_agent_id": "goal-reminder",
+        "needs_reminder": false,
+        "skill_id": "synthetic",
+        "reason": "synthetic",
+        "foreground_task_key": "synthetic",
+        "confidence": "synthetic"
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": "00000000-0000-4000-8000-000000000001",
+    "payload_type": "runtime.session",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "run",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "event": {
+        "kind": "reminder_reconciler_outcome",
+        "command_id": "00000000-0000-4000-8000-000000000001",
+        "outcome": "synthetic",
+        "reason": "synthetic"
+      },
+      "source_run_record_id": "00000000-0000-4000-8000-000000000001",
+      "source_run_record_sequence": 1
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": "00000000-0000-4000-8000-000000000001",
+    "payload_type": "session.workspace_branch.observed",
+    "payload_schema_version": 1,
+    "payload": {
+      "kind": "workspace_branch",
+      "record": {
+        "command_id": "00000000-0000-4000-8000-000000000001",
+        "workspace_root": "/home/fixture/ws",
+        "reference": {
+          "kind": "branch",
+          "name": "synthetic"
+        },
+        "vcs": "git",
+        "commit": "synthetic",
+        "dirty": false
+      }
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "stream": {
+      "kind": "session",
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "sequence": 1,
+    "recorded_at": 1,
+    "record_type": "event",
+    "durability": "durable",
+    "causation_id": null,
+    "payload_type": "runtime.session.permission_profile_committed",
+    "payload_schema_version": 1,
+    "payload": {
+      "schema_version": 1,
+      "permission_epoch": 1,
+      "source": {
+        "kind": "built_in",
+        "id": "synthetic",
+        "display_name": "synthetic"
+      },
+      "resolved_snapshot": {
+        "schema_version": 1,
+        "filesystem": {
+          "mode": "synthetic",
+          "minimal_runtime_set_version": null,
+          "workspace_roots": [],
+          "rules": [],
+          "protected_metadata": false
+        },
+        "local_command_network": {
+          "mode": "synthetic",
+          "targets": [],
+          "unix_sockets": []
+        },
+        "approval": "synthetic",
+        "reviewer": "synthetic"
+      },
+      "definition_sha256": "synthetic",
+      "managed_ancestor_sha256": [],
+      "managed_enforcement": {
+        "schema_version": 1,
+        "constraint_epoch": 1,
+        "constraint_sha256": "synthetic",
+        "component_ceilings": {
+          "filesystem_modes": [
+            "synthetic"
+          ],
+          "network_modes": [
+            "synthetic"
+          ],
+          "approval": [
+            "synthetic"
+          ],
+          "reviewer": [
+            "synthetic"
+          ]
+        },
+        "filesystem_rules": [],
+        "network_targets": [],
+        "unix_sockets": [],
+        "managed_targets_only": false,
+        "platform": "synthetic",
+        "backend_id": "synthetic"
+      },
+      "resulting_snapshot_sha256": "synthetic",
+      "cause": "synthetic",
+      "actor": {
+        "kind": "runtime",
+        "id": null
+      },
+      "command": null,
+      "pending_action_cancellations": []
+    }
+  }
+]

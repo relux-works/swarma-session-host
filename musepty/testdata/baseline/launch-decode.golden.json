@@ -1,0 +1,48 @@
+{
+  "decoded": {
+    "contract": "task-board.muse-session-launch-v1",
+    "model": "echo",
+    "work_dir": "/baseline/home",
+    "env": [
+      "HOME=/baseline/home",
+      "PATH=/baseline/home",
+      "TERM=xterm-256color"
+    ],
+    "fragment": {
+      "credential_store": {
+        "selection": "file"
+      },
+      "env": {
+        "TBH_CREDENTIAL_BACKEND": "file",
+        "XDG_CACHE_HOME": "/baseline/home/cache",
+        "XDG_CONFIG_HOME": "/baseline/home/config",
+        "XDG_DATA_HOME": "/baseline/home/data",
+        "XDG_STATE_HOME": "/baseline/home/state"
+      },
+      "environment": "muse",
+      "fragment": "launch-env-fragment-v4",
+      "permissions": {
+        "locked": false,
+        "mode": "native",
+        "source": "default"
+      },
+      "precedence": {
+        "placement": "winner-last",
+        "winner": "higher-weight"
+      },
+      "profile": {
+        "lock_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "operator"
+      }
+    },
+    "fragment_sha256": "98348e338ac7aa24ba6450153a5340a46392519926e70da26ec13fec09de91ba",
+    "profile": "operator",
+    "profile_lock_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "managed_home": "/baseline/home/data"
+  },
+  "refusals": [
+    "decoding Muse session launch: trailing JSON content",
+    "decoding Muse session launch: json: unknown field \"foreign\"",
+    "Muse session launch fragment does not match the recorded sha256"
+  ]
+}

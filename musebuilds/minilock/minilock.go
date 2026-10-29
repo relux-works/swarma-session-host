@@ -14,7 +14,7 @@
 // script's own trap withdraws the ticket and drops the lock.
 //
 // The argument grammar above is the canonical script's real CLI,
-// read from /Users/administrator/.local/bin/mini-build-lock: `run
+// read from the installed mini-build-lock helper: `run
 // <owner> -- <command...>` and `status`, exit 2 on usage, 130 on
 // INT, 143 on TERM, otherwise the command's status. The script waits
 // unboundedly (FIFO ticket, one-second poll, stale-holder break),
