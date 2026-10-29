@@ -31,7 +31,18 @@ jobs:
           # Both checks run even when the first one fails.
           set +e
           run_check() {
-            python3 -c 'import os, sys; load = os.getloadavg()[0]; print("start load 1m:", load, flush=True); sys.exit(0 if load < 20 else 125)'
+            python3 -c '
+          import os, sys, time
+          deadline = time.monotonic() + 120
+          while True:
+              load = os.getloadavg()[0]
+              print("start load 1m:", load, flush=True)
+              if load < 20:
+                  sys.exit(0)
+              if time.monotonic() >= deadline:
+                  sys.exit(125)
+              time.sleep(5)
+          '
             load_status=$?
             if [ "$load_status" -ne 0 ]; then
               printf 'check unavailable: start load could not be admitted\n'
