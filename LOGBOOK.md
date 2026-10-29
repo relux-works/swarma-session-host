@@ -5,6 +5,11 @@
 
 ## 2026-10-29
 
+### 2127 — Transport termination must cancel the effect, not only set a flag
+- FINDING: A reserved writer can resume after EOF and still enter stdin; a backpressured writer can complete later. Separately, an outbox loop can ignore EOF already present in a write reply and send its next action before polling.
+- FIX: Close the actual stdin writer before publishing output termination, canceling pending I/O without waiting on write serialization. Keep uncertain receipts. Retire a valid reply receipt and persist the closed host fence before considering the next action.
+- VALIDATION: A deterministic reservation barrier reproduces a post-EOF payload; a real filled pipe exercises cancellation before its reader is released, with live-output controls and receipt-only controller replacement. A two-action initialization reply fixture catches the missing host fence. Previously committed pipe bytes cannot be withdrawn.
+
 ### 2111 — Output EOF and process exit are different observations
 - FINDING: A child can close stdout while keeping stdin open and remaining alive. Process-exit status alone leaves an old idle checkpoint eligible for another write into a dead observation transport.
 - FIX: Runner protocol 3 exposes output termination independently, wakes tail readers and closes further writes. The host feeds that termination into the adapter EOF path and retains a closed fence across replacement. Protocol 2 runners are refused for this path.

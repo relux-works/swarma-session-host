@@ -110,8 +110,14 @@ The retained prefix is not rotated; exhaustion currently closes delivery.
 The worker polls nonblocking status and reads only an existing output suffix.
 Ordinary idle time therefore does not trigger a blocking-read timeout. Output EOF
 or collector read failure is independently exposed as `output_ended`, even if the
-child remains alive with stdin open. The runner latches writes closed, tail reads
-return promptly, and the host closes its durable fence across replacement. Older
+child remains alive with stdin open. The runner closes its actual stdin writer to
+cancel reserved or backpressured I/O before publishing the output-ended boundary;
+it does not wait for the write serialization lock. An uncertain or partial write
+retains its unknown receipt without replay. Bytes already committed to the pipe
+before that cancellation cannot be withdrawn. Tail reads return promptly, and the
+host closes its durable fence across replacement. A write reply reporting EOF,
+exit or overflow retires any valid receipt and durably fences the remaining outbox
+before another effect; polling can still consume the terminal observation. Older
 runner protocol versions cannot prove this observation and are refused. No host
 state lock spans runner I/O. An already issued write cannot be retracted by a
 concurrent hold or stop; durable stop/security intent prevents subsequent writes.
@@ -175,6 +181,11 @@ Additional fixtures cover actual failed-write unknown receipts, pre-Prepare
 durable intent, receipt retirement before catch-up, protocol security STOP, stored
 boundary/release refusal and runner-version mismatch. A live child closing stdout
 without exiting closes delivery across replacement, paired with live output.
+Deterministic reservation and real-pipe backpressure fixtures test cancellation
+before releasing a live child's reader; the latter retains only its deliberately
+prefilled prefix. Controller replacement queries the unknown receipt without
+replay. A two-action initialization fixture reports termination in the first
+write reply and verifies the remaining action is retained without another write.
 Two isolated control plants intentionally resend missing input and infer completion
 from acceptance; each fails the specific negative assertion. Source is restored
 after those controls. Existing fixture/security/lifecycle tests remain applicable.

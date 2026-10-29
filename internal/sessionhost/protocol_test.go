@@ -63,6 +63,17 @@ func TestProtocolProcess(t *testing.T) {
 					os.Exit(8)
 				}
 				io.Copy(io.Discard, os.Stdin)
+				// Cancellation now closes the runner's stdin writer. Remain
+				// alive until the test has separately observed output EOF.
+				for {
+					if _, err := os.Stat("exit-after-output"); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						os.Exit(7)
+					}
+					time.Sleep(time.Millisecond)
+				}
 				os.Exit(0)
 			}
 			if mode == "closed-stdin" {
@@ -452,6 +463,11 @@ func TestProtocolLiveOutputTermination(t *testing.T) {
 			}
 			if after.Writes != want || after.PID != initial.PID || after.Instance != initial.Instance || after.Exited {
 				t.Fatalf("unexpected post-replacement effects: %+v", after)
+			}
+			if ended {
+				if err := os.WriteFile(filepath.Join(dir, "exit-after-output"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
 			}
 		})
 	}

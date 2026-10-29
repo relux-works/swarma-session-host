@@ -309,9 +309,16 @@ func (h *Host) reconcileOutbox() bool {
 		h.mu.Lock()
 		next := cloneState(h.state)
 		next.Protocol.Pending = next.Protocol.Pending[1:]
+		terminal := r.OutputEnded || r.Exited || r.Overflow
+		if terminal {
+			// Keep the committed write receipt, but fence before any later
+			// action. Polling can still ingest the terminal observation.
+			h.writeBlocked = true
+			next.Fence, next.InputState = "unknown", InputUnknown
+		}
 		err = h.persistLocked(next)
 		h.mu.Unlock()
-		if err != nil {
+		if err != nil || terminal {
 			return false
 		}
 	}
