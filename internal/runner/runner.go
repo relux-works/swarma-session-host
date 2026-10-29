@@ -66,6 +66,12 @@ type Response struct {
 	Writes              int    `json:"writes"`
 }
 
+type childInput interface {
+	Write([]byte) (int, error)
+	Close() error
+	SetWriteDeadline(time.Time) error
+}
+
 type writeRecord struct {
 	digest [32]byte
 	code   string
@@ -77,7 +83,7 @@ type Server struct {
 	child       *os.Process
 	processMu   sync.Mutex
 	pid         int
-	stdin       *os.File
+	stdin       childInput
 	stdout      io.ReadCloser
 	instance    string
 	done        chan struct{}
@@ -194,7 +200,13 @@ func (s *Server) collect(stdout io.ReadCloser) {
 		}
 	}
 	s.mu.Lock()
-	s.outputEnded, s.blocked = true, true
+	// Closing the actual pipe cancels a reserved writer that has not entered
+	// native I/O and wakes a backpressured write. Publish termination only once
+	// that cancellation boundary has completed; do not wait on writeMu, which
+	// the canceled writer itself owns. Its reserved receipt stays uncertain.
+	s.blocked = true
+	s.stdin.Close()
+	s.outputEnded = true
 	s.changedLocked()
 	s.mu.Unlock()
 	stdout.Close()

@@ -113,6 +113,45 @@ func TestFixtureChild(t *testing.T) {
 	case "echo":
 		io.Copy(os.Stdout, os.Stdin)
 		os.Exit(0)
+	case "gated-output-end":
+		deadline := time.Now().Add(15 * time.Second)
+		waitFile := func(name string) {
+			for {
+				if _, err := os.Stat(name); err == nil {
+					return
+				}
+				if time.Now().After(deadline) {
+					os.Exit(8)
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}
+		for {
+			_, end := os.Stat("end-output")
+			_, drain := os.Stat("drain-input")
+			if end == nil || drain == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				os.Exit(8)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if _, err := os.Stat("end-output"); err == nil {
+			os.Stdout.Close()
+			if os.WriteFile("output-closed", nil, 0600) != nil {
+				os.Exit(9)
+			}
+			waitFile("drain-input")
+		}
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			os.Exit(10)
+		}
+		if os.WriteFile("received-input", data, 0600) != nil {
+			os.Exit(11)
+		}
+		os.Exit(0)
 	case "eof-live":
 		os.Stdout.Close()
 		io.Copy(io.Discard, os.Stdin)
@@ -394,8 +433,15 @@ func (failedOutput) Close() error             { return nil }
 // A collector read failure has the same closed observation/write invariant as
 // EOF; no fabricated process-exit claim is needed to unblock a tail read.
 func TestCollectorReadFailureClosesTransport(t *testing.T) {
+	readEnd, input, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readEnd.Close()
+	defer input.Close()
 	s := &Server{changed: make(chan struct{}), outputDone: make(chan struct{}), closed: make(chan struct{}), writes: make(map[uint64]writeRecord)}
 	s.cfg.IOTimeout = time.Second
+	s.stdin = input
 	s.wg.Add(1)
 	s.collect(failedOutput{})
 	r := s.read(Request{})
