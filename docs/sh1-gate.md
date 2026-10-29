@@ -1,5 +1,15 @@
 # SH1 gate interface
 
+> **Historical SH1 gate (2026-10-29).** This revision retires
+> `.github/workflows/sh1-lanes.yml` and `sh1-tooling.yml`; module CI is now
+> [module.yml](../.github/workflows/module.yml). The sections below record the
+> historical extraction gate, including its former workflow and credential
+> references. They describe no current credential use or settings change.
+> `tools/sh1/ci/run.py` hashes the removed `sh1-lanes.yml` and is no longer
+> runnable as-is. The Python unit tests under `tools/sh1/ci` no longer run in
+> any CI. The Go `tools/sh1` package still runs under module CI through `./...`.
+> Historical gate results do not establish current session-host qualification.
+
 F part 1 adds generic tooling and an invented fixture. It copies no package
 implementation. Green public tooling CI validates the tools; it does not prove
 that the private session manager can be extracted, or activate any SH2 capability.
