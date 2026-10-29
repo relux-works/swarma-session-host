@@ -4,7 +4,8 @@
 > historical and is not the implementation plan. Current development starts with
 > a fresh, macOS-first host/runner fixture prototype, with no board-daemon code
 > reuse. The active scope and limits are in [M1](../docs/prototype-m1.md) and
-> [M2](../docs/prototype-m2.md); hosted
+> [M2](../docs/prototype-m2.md), plus the internal
+> [M3-S admission slice](../docs/prototype-m3-synthetic.md); hosted
 > launcher/model-configuration integration remains gated by its owners' jointly
 > accepted contracts. Historical platform descriptions below claim no current
 > implementation, activated security boundary or prototype acceptance evidence.
