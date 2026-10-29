@@ -59,9 +59,9 @@ accounts or shared services are accessed.
 | Git | `git rev-parse HEAD`; `git log --show-signature -1` | Revision and signature evidence on stdout |
 | Historical SH1 tools | See [archived extraction tooling](docs/sh1-gate.md) | Historical fixture/gate reports; not a prototype dependency or acceptance proof |
 
-The existing SH1 workflows are awaiting a separate transition to secret-free
-module CI. They are not prototype acceptance evidence; publication must follow
-that transition. Outstanding integration and repository-owner actions are in
+Prototype verification uses module-wide `go vet` and `go test` with no private
+source checkout. Historical SH1 extraction results do not establish prototype
+acceptance. Outstanding integration and repository-owner actions are in
 [UNRESOLVED_QUESTIONS.md](UNRESOLVED_QUESTIONS.md).
 
 [Module CI](.github/workflows/module.yml) runs Go 1.25.5 module vet and race
