@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	Version       = 1
 	MaxActions    = 4
 	MaxFacts      = 16
 	MaxWrite      = 4096
@@ -36,6 +37,10 @@ type Capabilities struct {
 }
 
 type Descriptor struct {
+	Version int
+	// Every enabled capability is qualified on this exact native release.
+	// Contract fixtures use "schematic" and confer no native qualification.
+	ObservedRelease  string
 	Name             string
 	PrimaryTransport string
 	DeclaredFallback string // Declaration only; never authorizes substitution.
@@ -55,6 +60,7 @@ type Config struct {
 	Selection                Selection
 	Workspace, NativeSession string
 	Lifecycle                Lifecycle
+	NativeRelease            string // Caller-supplied release evidence; no catalog/discovery.
 }
 
 // Lifecycle admission describes adapter semantics only, never launch authority.
@@ -201,6 +207,12 @@ func boundedID(s string, required bool) bool {
 // durable record; adapters prove native semantics. Overall idle is not inferred
 // from an individual completion, action, pipe write or liveness observation.
 func Validate(d Descriptor, t Transition) error {
+	if d.Version != Version {
+		return errors.New("unsupported_adapter_boundary_version")
+	}
+	if !boundedID(d.ObservedRelease, true) {
+		return errors.New("missing_adapter_observed_release")
+	}
 	if !boundedID(d.Name, true) || (d.PrimaryTransport != "pipe" && d.PrimaryTransport != "pty") || (d.DeclaredFallback != "" && d.DeclaredFallback != "pty") {
 		return errors.New("invalid_adapter_descriptor")
 	}

@@ -94,7 +94,7 @@ func TestUsageAndAuthorityObservations(t *testing.T) {
 		}
 	}
 	x := Transition{Checkpoint: json.RawMessage(`{"version":1}`), View: View{Activity: Approval}, Attention: []Attention{{Kind: AuthorityRequired, Key: "request-a", Class: "unclassified", OwnerOnly: true}}}
-	d := Descriptor{Name: "fixture", PrimaryTransport: "pipe"}
+	d := Descriptor{Version: Version, ObservedRelease: "schematic", Name: "fixture", PrimaryTransport: "pipe"}
 	if Validate(d, x) != nil {
 		t.Fatal("typed escalation refused")
 	}
@@ -114,5 +114,27 @@ func TestQueuedCompletionKeepsIndependentInputAndActivity(t *testing.T) {
 	}}
 	if Validate(d, x) != nil {
 		t.Fatal("queued successor forced into one-current-input model")
+	}
+}
+
+// Boundary version and observed-release metadata are mandatory beside an
+// otherwise valid transition; a fixture declaration is not native qualification.
+func TestBoundaryVersionAndObservedRelease(t *testing.T) {
+	f := fixtures()[0]
+	x := transition(f)
+	if Validate(f.descriptor, x) != nil {
+		t.Fatal("valid versioned descriptor refused")
+	}
+	for _, version := range []int{0, Version + 1} {
+		d := f.descriptor
+		d.Version = version
+		if Validate(d, x) == nil {
+			t.Fatal("unsupported boundary version")
+		}
+	}
+	d := f.descriptor
+	d.ObservedRelease = ""
+	if Validate(d, x) == nil {
+		t.Fatal("missing capability release")
 	}
 }

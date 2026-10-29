@@ -10,7 +10,7 @@ import (
 
 func driverConfig() ap.Config {
 	c := config()
-	return ap.Config{Lifecycle: ap.Create, Selection: ap.Selection{Provider: c.Provider, Model: c.Model, Effort: c.Effort}, Workspace: c.Workspace}
+	return ap.Config{NativeRelease: ObservedRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: c.Provider, Model: c.Model, Effort: c.Effort}, Workspace: c.Workspace}
 }
 func observe(t *testing.T, d *Driver, offset *uint64, wire string) ap.Transition {
 	t.Helper()
@@ -133,6 +133,13 @@ func TestDriverLifecycleAdmission(t *testing.T) {
 	c.NativeSession = "session-a"
 	if d, _, err := OpenDriver(c, nil); !errors.Is(err, ap.ErrUnsupported) || d != nil {
 		t.Fatal("preallocated Codex identity admitted")
+	}
+	for _, release := range []string{"", "0.163.0", "future-release"} {
+		bad := driverConfig()
+		bad.NativeRelease = release
+		if d, _, err := OpenDriver(bad, nil); !errors.Is(err, ap.ErrUnsupported) || d != nil {
+			t.Fatal("unqualified native release inherited capabilities")
+		}
 	}
 }
 

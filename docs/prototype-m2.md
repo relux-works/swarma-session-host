@@ -18,6 +18,29 @@ input only; generated upstream schemas are not vendored in the implementation.
 
 ## Pure adapter boundary
 
+The frozen boundary is **adapterprotocol v1**. Descriptors and durable protocol
+state carry version 1; other versions are rejected before initialization or
+replay. Every enabled capability in a descriptor is bound to its
+`ObservedRelease`, which is `0.164.0` for the Codex adapter. Schematic fixture
+descriptors identify their release as `schematic` and establish no native feature.
+
+Any change to boundary fields, meaning, capabilities or acceptance rules requires
+a reviewed version bump and updated positive/negative counterexamples. Native
+Claude/Muse qualification may correct the schematic vectors through that process;
+an adapter must not silently widen v1. A new harness release inherits no capability
+automatically: re-qualify it, or explicitly carry the capabilities forward with
+evidence in a reviewed version bump. Codex construction requires an explicit
+matching `NativeRelease`; stored release mismatch also refuses. This is a
+caller-supplied declaration, not verification of a running binary. Actual plan
+and native-binary binding remain a hosted-admission requirement.
+
+| Enabled Codex capability | Observed native release |
+| --- | --- |
+| Create and idle next turn | 0.164.0 |
+| Native turn identity | 0.164.0 |
+| Conservative activity | 0.164.0 |
+| Input idle fence | 0.164.0 |
+
 `internal/adapterprotocol.Driver` has no process, transport or credential I/O.
 Construction receives opaque provider/model/effort strings, an admitted workspace,
 an explicit lifecycle selection and optional metadata checkpoint. `Begin`,
@@ -124,6 +147,7 @@ After an admitted caller has started the runner with its approved non-secret pla
   --runner /absolute/private/runner.sock \
   --state /absolute/private/host-state --execution execution-id \
   --adapter codex --workspace /absolute/admitted/workspace \
+  --native-release 0.164.0 \
   --vendor openai --model "$MODEL" --reasoning "$EFFORT" \
   --io-timeout 5s --poll-interval 25ms
 ```

@@ -39,7 +39,7 @@ func main() {
 func serve(args []string) int {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
 	var cfg sessionhost.Config
-	var socket, adapter, inputState, workspace string
+	var socket, adapter, inputState, workspace, nativeRelease string
 	flags.StringVar(&socket, "socket", "", "absolute private host socket")
 	flags.StringVar(&cfg.Socket, "runner", "", "absolute runner socket")
 	flags.StringVar(&cfg.StateDir, "state", "", "absolute private state directory")
@@ -50,6 +50,7 @@ func serve(args []string) int {
 	flags.StringVar(&cfg.Selection.Model, "model", "", "opaque fixture selection")
 	flags.StringVar(&cfg.Selection.Reasoning, "reasoning", "", "opaque fixture selection")
 	flags.DurationVar(&cfg.IOTimeout, "io-timeout", 0, "explicit bounded I/O timeout")
+	flags.StringVar(&nativeRelease, "native-release", "", "explicit qualified native release")
 	flags.StringVar(&workspace, "workspace", "", "absolute admitted workspace for protocol adapter")
 	flags.DurationVar(&cfg.PollInterval, "poll-interval", 0, "explicit protocol output poll interval")
 	flags.Parse(args)
@@ -67,7 +68,7 @@ func serve(args []string) int {
 		}
 		cfg.ProtocolName = "codex"
 		cfg.ProtocolFactory = func(saved []byte) (ap.Driver, uint64, error) {
-			return codexadapter.OpenDriver(ap.Config{Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: workspace}, saved)
+			return codexadapter.OpenDriver(ap.Config{NativeRelease: nativeRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: workspace}, saved)
 		}
 	default:
 		fail("unsupported_adapter", 2)

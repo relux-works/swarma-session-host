@@ -32,15 +32,17 @@ type driverRecord struct {
 
 var _ ap.Driver = (*Driver)(nil)
 
+const ObservedRelease = "0.164.0"
+
 func Descriptor() ap.Descriptor {
-	return ap.Descriptor{Name: "codex", PrimaryTransport: "pipe", Capabilities: ap.Capabilities{NextTurn: true, NativeTurnIdentity: true, Activity: true, IdleFence: true}}
+	return ap.Descriptor{Version: ap.Version, ObservedRelease: ObservedRelease, Name: "codex", PrimaryTransport: "pipe", Capabilities: ap.Capabilities{NextTurn: true, NativeTurnIdentity: true, Activity: true, IdleFence: true}}
 }
 func (d *Driver) Descriptor() ap.Descriptor { return Descriptor() }
 
 // OpenDriver restores metadata only. The returned offset is a replay request,
 // never authority to trust an unobserved runner or write another turn.
 func OpenDriver(cfg ap.Config, saved []byte) (*Driver, uint64, error) {
-	if !Descriptor().SupportsLifecycle(cfg) || cfg.NativeSession != "" {
+	if cfg.NativeRelease != ObservedRelease || !Descriptor().SupportsLifecycle(cfg) || cfg.NativeSession != "" {
 		return nil, 0, ap.ErrUnsupported
 	}
 	c := Config{Provider: cfg.Selection.Provider, Model: cfg.Selection.Model, Effort: cfg.Selection.Effort, Workspace: cfg.Workspace}

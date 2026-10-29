@@ -38,10 +38,10 @@ func TestProtocolNativeReceiptAndTurnAreDistinct(t *testing.T) {
 			defer s.close()
 			n := Notice{ID: "one", Reference: "synthetic/one"}
 			sel := Selection{Vendor: "provider", Model: "model", Reasoning: "effort"}
-			d := factDriver{ap.Descriptor{Name: protocol, PrimaryTransport: "pipe", Capabilities: ap.Capabilities{NativeTurnIdentity: protocol != "claude-stream-json", NextTurn: true}}}
+			d := factDriver{ap.Descriptor{Version: ap.Version, ObservedRelease: "schematic", Name: protocol, PrimaryTransport: "pipe", Capabilities: ap.Capabilities{NativeTurnIdentity: protocol != "claude-stream-json", NextTurn: true}}}
 			checkpoint := json.RawMessage(`{"phase":"synthetic"}`)
 			h := &Host{store: s, ctx: context.Background(), driver: d, state: State{Version: 1, Execution: "synthetic", Adapter: protocol, Selection: sel, Epoch: 1, Sequence: 1, Fence: "open", InputState: InputBusy,
-				Records: []Record{{Notice: n, Digest: digestNotice(n, sel), Sequence: 1, State: "unknown"}}, Protocol: &ProtocolState{Checkpoint: checkpoint, View: ap.View{InputID: "one", NativeSession: "session-a", Activity: ap.Busy}}}}
+				Records: []Record{{Notice: n, Digest: digestNotice(n, sel), Sequence: 1, State: "unknown"}}, Protocol: &ProtocolState{BoundaryVersion: ap.Version, ObservedRelease: "schematic", Checkpoint: checkpoint, View: ap.View{InputID: "one", NativeSession: "session-a", Activity: ap.Busy}}}}
 			acceptedTurn, receipt, completedTurn := "turn-a", "turn-a", "turn-a"
 			if protocol == "muse-msp" {
 				acceptedTurn = ""
@@ -106,9 +106,9 @@ func TestProtocolQueuedSuccessorKeepsBusy(t *testing.T) {
 	sel := Selection{Vendor: "provider", Model: "model", Reasoning: "effort"}
 	a, b := Notice{ID: "one", Reference: "synthetic/one"}, Notice{ID: "two", Reference: "synthetic/two"}
 	cp := json.RawMessage(`{"phase":"synthetic"}`)
-	d := factDriver{ap.Descriptor{Name: "muse-msp", PrimaryTransport: "pipe", Capabilities: ap.Capabilities{NextTurn: true, QueueWhileBusy: true, NativeTurnIdentity: true}}}
+	d := factDriver{ap.Descriptor{Version: ap.Version, ObservedRelease: "schematic", Name: "muse-msp", PrimaryTransport: "pipe", Capabilities: ap.Capabilities{NextTurn: true, QueueWhileBusy: true, NativeTurnIdentity: true}}}
 	h := &Host{store: s, ctx: context.Background(), driver: d, state: State{Version: 1, Execution: "synthetic", Adapter: "muse-msp", Selection: sel, Epoch: 1, Sequence: 2, Fence: "open", InputState: InputBusy,
-		Records: []Record{{Notice: a, Digest: digestNotice(a, sel), Sequence: 1, State: "unknown", NativeAccepted: true, NativeSession: "session-a", NativeReceipt: "command-a"}, {Notice: b, Digest: digestNotice(b, sel), Sequence: 2, State: "unknown"}}, Protocol: &ProtocolState{Checkpoint: cp}}}
+		Records: []Record{{Notice: a, Digest: digestNotice(a, sel), Sequence: 1, State: "unknown", NativeAccepted: true, NativeSession: "session-a", NativeReceipt: "command-a"}, {Notice: b, Digest: digestNotice(b, sel), Sequence: 2, State: "unknown"}}, Protocol: &ProtocolState{BoundaryVersion: ap.Version, ObservedRelease: "schematic", Checkpoint: cp}}}
 	x := ap.Transition{Checkpoint: cp, View: ap.View{InputID: "two", NativeSession: "session-a", CurrentTurn: "turn-b", Activity: ap.Busy}, Facts: []ap.Fact{
 		{Kind: ap.InputAccepted, InputID: "two", NativeSession: "session-a", ReceiptID: "command-b", NativeID: "turn-b"},
 		{Kind: ap.TurnCompleted, InputID: "one", NativeSession: "session-a", ReceiptID: "command-a", NativeID: "turn-a"},

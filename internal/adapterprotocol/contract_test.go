@@ -18,15 +18,15 @@ type protocolFixture struct {
 // Wire strings are schematic examples, not release-schema conformance fixtures.
 func fixtures() []protocolFixture {
 	return []protocolFixture{
-		{Descriptor{Name: "codex-fixture", PrimaryTransport: "pipe", Capabilities: Capabilities{NextTurn: true, NativeTurnIdentity: true, Activity: true}},
+		{Descriptor{Version: Version, ObservedRelease: "schematic", Name: "codex-fixture", PrimaryTransport: "pipe", Capabilities: Capabilities{NextTurn: true, NativeTurnIdentity: true, Activity: true}},
 			`{"id":3,"method":"turn/start","params":{"threadId":"session-a","input":[{"type":"text","text":"synthetic-reference"}]}}`,
 			`{"id":3,"result":{"turn":{"id":"turn-a","status":"inProgress"}}}`,
 			`{"method":"turn/completed","params":{"threadId":"session-a","turn":{"id":"turn-a","status":"completed"}}}`, "turn-a", "turn-a"},
-		{Descriptor{Name: "claude-stream-json-fixture", PrimaryTransport: "pipe", DeclaredFallback: "pty", Capabilities: Capabilities{PreallocatedIdentity: true, NextTurn: true, Activity: true}},
+		{Descriptor{Version: Version, ObservedRelease: "schematic", Name: "claude-stream-json-fixture", PrimaryTransport: "pipe", DeclaredFallback: "pty", Capabilities: Capabilities{PreallocatedIdentity: true, NextTurn: true, Activity: true}},
 			`{"type":"user","session_id":"session-a","message":{"role":"user","content":"synthetic-reference"}}`,
 			`{"type":"assistant","session_id":"session-a","message":{"role":"assistant","content":[]}}`,
 			`{"type":"result","subtype":"success","is_error":false,"session_id":"session-a","result":"ok"}`, "", ""},
-		{Descriptor{Name: "muse-msp-fixture", PrimaryTransport: "pipe", DeclaredFallback: "pty", Capabilities: Capabilities{PreallocatedIdentity: true, NextTurn: true, QueueWhileBusy: true, NativeTurnIdentity: true, Activity: true}},
+		{Descriptor{Version: Version, ObservedRelease: "schematic", Name: "muse-msp-fixture", PrimaryTransport: "pipe", DeclaredFallback: "pty", Capabilities: Capabilities{PreallocatedIdentity: true, NextTurn: true, QueueWhileBusy: true, NativeTurnIdentity: true, Activity: true}},
 			`{"id":3,"method":"turn/start","params":{"sessionId":"session-a","ifBusy":"queue","input":"synthetic-reference"}}`,
 			`{"id":3,"result":{"commandId":"command-a","accepted":true,"disposition":"queued"}}`,
 			`{"method":"turn/completed","params":{"sessionId":"session-a","turnId":"turn-a","status":"completed"}}`, "command-a", "turn-a"},

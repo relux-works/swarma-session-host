@@ -95,7 +95,7 @@ func setupProtocol(t *testing.T, mode string) (sessionhost.Config, *runner.Serve
 		Selection:    sessionhost.Selection{Vendor: "unfamiliar-provider", Model: "unfamiliar-model", Reasoning: "unfamiliar-effort"},
 		ProtocolName: "codex", PollInterval: 10 * time.Millisecond, IOTimeout: time.Second}
 	cfg.ProtocolFactory = func(saved []byte) (ap.Driver, uint64, error) {
-		return codexadapter.OpenDriver(ap.Config{Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: dir}, saved)
+		return codexadapter.OpenDriver(ap.Config{NativeRelease: codexadapter.ObservedRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: dir}, saved)
 	}
 	return cfg, s, dir
 }

@@ -176,7 +176,10 @@ func Open(cfg Config) (*Host, error) {
 			return nil, errors.New("protocol_restore_refused")
 		}
 		if state.Protocol == nil {
-			state.Protocol = &ProtocolState{Checkpoint: driver.Snapshot().Checkpoint, View: driver.Snapshot().View}
+			state.Protocol = &ProtocolState{BoundaryVersion: ap.Version, ObservedRelease: driver.Descriptor().ObservedRelease, Checkpoint: driver.Snapshot().Checkpoint, View: driver.Snapshot().View}
+		} else if state.Protocol.ObservedRelease != driver.Descriptor().ObservedRelease {
+			store.close()
+			return nil, errors.New("protocol_release_conflict")
 		}
 		state.InputState = InputUnknown
 	}

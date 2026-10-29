@@ -19,12 +19,14 @@ import (
 // bytes remain in the runner; a restored driver requests its complete-frame
 // replay offset. WireSequence is independent from the notice queue sequence.
 type ProtocolState struct {
-	Checkpoint   json.RawMessage `json:"checkpoint"`
-	WireSequence uint64          `json:"wire_sequence"`
-	Pending      []WireAction    `json:"pending"`
-	View         ap.View         `json:"view"`
-	Attention    []ap.Attention  `json:"attention,omitempty"`
-	Usage        *ap.Usage       `json:"usage,omitempty"`
+	BoundaryVersion int             `json:"boundary_version"`
+	ObservedRelease string          `json:"observed_release"`
+	Checkpoint      json.RawMessage `json:"checkpoint"`
+	WireSequence    uint64          `json:"wire_sequence"`
+	Pending         []WireAction    `json:"pending"`
+	View            ap.View         `json:"view"`
+	Attention       []ap.Attention  `json:"attention,omitempty"`
+	Usage           *ap.Usage       `json:"usage,omitempty"`
 }
 type WireAction struct {
 	Sequence uint64 `json:"sequence"`
@@ -66,17 +68,20 @@ func validProtocolState(s State) bool {
 		return true
 	}
 	p := s.Protocol
+	if p.BoundaryVersion != ap.Version || p.ObservedRelease == "" {
+		return false
+	}
 	if len(p.Checkpoint) == 0 || len(p.Checkpoint) > ap.MaxCheckpoint || !json.Valid(p.Checkpoint) || p.WireSequence > runner.MaxWrites || len(p.Pending) > ap.MaxActions || uint64(len(p.Pending)) > p.WireSequence {
 		return false
 	}
 	// The descriptor-independent view checks use no facts/actions. A factory
 	// must additionally validate the actual descriptor and opaque checkpoint.
-	if ap.Validate(ap.Descriptor{Name: s.Adapter, PrimaryTransport: "pipe"}, ap.Transition{Checkpoint: p.Checkpoint, View: p.View}) != nil {
+	if ap.Validate(ap.Descriptor{Version: ap.Version, ObservedRelease: p.ObservedRelease, Name: s.Adapter, PrimaryTransport: "pipe"}, ap.Transition{Checkpoint: p.Checkpoint, View: p.View}) != nil {
 		return false
 	}
 	attentionView := p.View
 	attentionView.Activity = ap.Approval
-	if ap.Validate(ap.Descriptor{Name: s.Adapter, PrimaryTransport: "pipe", Capabilities: ap.Capabilities{TokenUsage: true}}, ap.Transition{Checkpoint: p.Checkpoint, View: attentionView, Attention: p.Attention, Usage: p.Usage}) != nil {
+	if ap.Validate(ap.Descriptor{Version: ap.Version, ObservedRelease: p.ObservedRelease, Name: s.Adapter, PrimaryTransport: "pipe", Capabilities: ap.Capabilities{TokenUsage: true}}, ap.Transition{Checkpoint: p.Checkpoint, View: attentionView, Attention: p.Attention, Usage: p.Usage}) != nil {
 		return false
 	}
 	keys := map[string]bool{}
