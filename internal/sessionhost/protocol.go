@@ -339,12 +339,12 @@ func (h *Host) pollProtocol() bool {
 		}
 		data = r.Data
 	}
-	t, observeErr := h.driver.Observe(ap.Chunk{Offset: offset, Bytes: data, AtTail: true, EOF: r.Exited})
+	t, observeErr := h.driver.Observe(ap.Chunk{Offset: offset, Bytes: data, AtTail: true, EOF: r.Exited || r.OutputEnded})
 	h.mu.Lock()
 	h.outputOffset = offset + uint64(len(data))
 	err = h.persistTransitionLocked(t)
 	h.mu.Unlock()
-	if observeErr != nil || err != nil || r.Exited {
+	if observeErr != nil || err != nil || r.Exited || r.OutputEnded {
 		h.failProtocol()
 		return false
 	}

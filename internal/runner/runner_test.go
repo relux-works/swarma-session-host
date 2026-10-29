@@ -113,6 +113,10 @@ func TestFixtureChild(t *testing.T) {
 	case "echo":
 		io.Copy(os.Stdout, os.Stdin)
 		os.Exit(0)
+	case "eof-live":
+		os.Stdout.Close()
+		io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
 	case "flood":
 		os.Stdout.Write(bytes.Repeat([]byte("x"), MaxOutput+4096))
 		io.Copy(io.Discard, os.Stdin)
@@ -323,5 +327,79 @@ func TestStartRefusalsPreserveOriginal(t *testing.T) {
 	got := call(t, client, Request{Op: "status", Execution: cfg.Execution}, "ok")
 	if got.Exited || !strings.HasSuffix(cfg.Socket, "r.sock") {
 		t.Fatal("original runner was disturbed")
+	}
+}
+
+// Output closure is independently observable while the child still owns live
+// stdin. Reads wake at the empty ended tail; new writes have no reserved effect.
+// The ordinary echo child supplies a valid output/write control.
+func TestOutputEndClosesWritesBeforeProcessExit(t *testing.T) {
+	for _, ended := range []bool{false, true} {
+		t.Run(fmt.Sprint(ended), func(t *testing.T) {
+			mode := "echo"
+			if ended {
+				mode = "eof-live"
+			}
+			cfg := testConfig(t, mode)
+			s, err := Start(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { s.Close() })
+			client := testClient(t, cfg)
+			call(t, client, Request{Op: "claim", Execution: cfg.Execution, Epoch: 1}, "ok")
+			if ended {
+				deadline := time.Now().Add(time.Second)
+				for {
+					status := call(t, client, Request{Op: "status", Execution: cfg.Execution}, "ok")
+					if status.OutputEnded {
+						if status.Exited {
+							t.Fatal("child exited before output end test")
+						}
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("output end not observable")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				read := call(t, client, Request{Op: "read", Execution: cfg.Execution, Epoch: 1}, "ok")
+				if !read.OutputEnded || read.Exited || len(read.Data) != 0 {
+					t.Fatal("empty ended read lost EOF")
+				}
+				refused := call(t, client, Request{Op: "write", Execution: cfg.Execution, Epoch: 1, Sequence: 1, Data: []byte("forbidden\n")}, "write_refused")
+				if refused.Writes != 0 {
+					t.Fatal("output end reserved a write")
+				}
+			} else {
+				status := call(t, client, Request{Op: "write", Execution: cfg.Execution, Epoch: 1, Sequence: 1, Data: []byte("valid\n")}, "written")
+				if status.OutputEnded {
+					t.Fatal("live output falsely ended")
+				}
+				read := call(t, client, Request{Op: "read", Execution: cfg.Execution, Epoch: 1}, "ok")
+				if string(read.Data) != "valid\n" || read.OutputEnded {
+					t.Fatal("live output control failed")
+				}
+			}
+			call(t, client, Request{Op: "stop", Execution: cfg.Execution, Epoch: 1}, "stopped")
+		})
+	}
+}
+
+type failedOutput struct{}
+
+func (failedOutput) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (failedOutput) Close() error             { return nil }
+
+// A collector read failure has the same closed observation/write invariant as
+// EOF; no fabricated process-exit claim is needed to unblock a tail read.
+func TestCollectorReadFailureClosesTransport(t *testing.T) {
+	s := &Server{changed: make(chan struct{}), outputDone: make(chan struct{}), closed: make(chan struct{}), writes: make(map[uint64]writeRecord)}
+	s.cfg.IOTimeout = time.Second
+	s.wg.Add(1)
+	s.collect(failedOutput{})
+	r := s.read(Request{})
+	if !r.OutputEnded || r.Exited || r.Code != "ok" || !s.blocked {
+		t.Fatal("read failure left transport eligible")
 	}
 }

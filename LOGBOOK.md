@@ -5,6 +5,11 @@
 
 ## 2026-10-29
 
+### 2111 — Output EOF and process exit are different observations
+- FINDING: A child can close stdout while keeping stdin open and remaining alive. Process-exit status alone leaves an old idle checkpoint eligible for another write into a dead observation transport.
+- FIX: Runner protocol 3 exposes output termination independently, wakes tail readers and closes further writes. The host feeds that termination into the adapter EOF path and retains a closed fence across replacement. Protocol 2 runners are refused for this path.
+- VALIDATION: A synthetic live child closing only stdout reproduces the old open/idle fence, then passes with the fix. Live output supplies a positive control; a collector read-error fixture shares the closed transport invariant. These are bounded same-user fixtures, not deployment confinement.
+
 ### 2038 — Native command receipts and turns need separate identities
 - FINDING: A queued protocol command can be accepted before a native turn exists. Storing that command receipt as the turn ID makes a later valid completion impossible to correlate.
 - FIX: The shared transition and durable notice record distinguish native receipt and turn IDs. Synthetic Codex, Claude stream-json and Muse MSP contract fixtures pair valid completion with wrong receipt/input/session rejection and verify rejected facts change neither state nor disk.

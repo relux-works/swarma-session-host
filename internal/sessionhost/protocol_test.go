@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,6 +47,32 @@ func TestProtocolProcess(t *testing.T) {
 		case "initialized":
 		case "thread/start":
 			write(map[string]any{"id": r.ID, "result": map[string]any{"thread": map[string]any{"id": "synthetic-thread"}, "model": r.Params["model"], "modelProvider": r.Params["modelProvider"]}})
+			if mode == "eof-live" {
+				deadline := time.Now().Add(10 * time.Second)
+				for {
+					if _, err := os.Stat("close-output"); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						os.Exit(7)
+					}
+					time.Sleep(time.Millisecond)
+				}
+				os.Stdout.Close()
+				if os.WriteFile("output-closed", nil, 0600) != nil {
+					os.Exit(8)
+				}
+				io.Copy(io.Discard, os.Stdin)
+				os.Exit(0)
+			}
+			if mode == "closed-stdin" {
+				os.Stdin.Close()
+				if os.WriteFile("input-closed", nil, 0600) != nil {
+					os.Exit(8)
+				}
+				time.Sleep(30 * time.Second)
+				os.Exit(0)
+			}
 		case "turn/start":
 			turn := fmt.Sprintf("turn-%d", r.ID)
 			write(map[string]any{"id": r.ID, "result": map[string]any{"turn": map[string]any{"id": turn, "status": "inProgress"}}})
@@ -202,11 +229,17 @@ func TestProtocolApprovalNeverAnswered(t *testing.T) {
 
 // Isolated journal snapshots plant the exact durable boundary after Prepare but
 // before the host recorded its write reply. A written receipt reconciles through
-// matching native completion; missing/conflicting effects never get resent.
+// matching native completion; missing/unknown/conflicting effects never resend.
+// Additional snapshots cover pre-Prepare intent and receipt retirement before
+// native catch-up; only the written controls resolve, without another write.
 func TestProtocolOutboxRecoveryNeverResends(t *testing.T) {
-	for _, effect := range []string{"written", "missing", "conflict"} {
+	for _, effect := range []string{"written", "missing", "conflict", "unknown", "intent", "retired"} {
 		t.Run(effect, func(t *testing.T) {
-			cfg, _, _ := setupProtocol(t, "normal")
+			mode := "normal"
+			if effect == "unknown" {
+				mode = "closed-stdin"
+			}
+			cfg, _, dir := setupProtocol(t, mode)
 			h := openHost(t, cfg)
 			before := awaitProtocol(t, h, "idle", func(s sessionhost.State) bool {
 				return s.InputState == sessionhost.InputIdle && len(s.Protocol.Pending) == 0
@@ -236,12 +269,18 @@ func TestProtocolOutboxRecoveryNeverResends(t *testing.T) {
 			}{notice, cfg.Selection})
 			noticeHash := sha256.Sum256(encoded)
 			before.Records = []sessionhost.Record{{Notice: notice, Digest: hex.EncodeToString(noticeHash[:]), Sequence: 1, State: "unknown"}}
+			originalCheckpoint, originalView := before.Protocol.Checkpoint, before.Protocol.View
 			before.Protocol.Checkpoint = transition.Checkpoint
 			before.Protocol.View = transition.View
 			before.Protocol.WireSequence = 4
 			before.Protocol.Pending = []sessionhost.WireAction{{Sequence: 4, Key: action.Key, InputID: action.InputID, Data: action.Bytes, Digest: hex.EncodeToString(hash[:])}}
 			before.InputState = sessionhost.InputBusy
-			if effect != "missing" {
+			if effect == "intent" {
+				before.Protocol.Checkpoint, before.Protocol.View = originalCheckpoint, originalView
+				before.Protocol.WireSequence, before.Protocol.Pending = 3, nil
+				before.InputState = sessionhost.InputIdle
+			}
+			if effect != "missing" && effect != "intent" {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				client, err := runner.Dial(ctx, cfg.Socket)
 				if err != nil {
@@ -261,8 +300,24 @@ func TestProtocolOutboxRecoveryNeverResends(t *testing.T) {
 				if effect == "conflict" {
 					data = bytes.ReplaceAll(data, []byte("synthetic/one"), []byte("synthetic/other"))
 				}
+				if effect == "unknown" {
+					deadline := time.Now().Add(time.Second)
+					for {
+						if _, err := os.Stat(filepath.Join(dir, "input-closed")); err == nil {
+							break
+						}
+						if time.Now().After(deadline) {
+							t.Fatal("fixture stdin not closed")
+						}
+						time.Sleep(time.Millisecond)
+					}
+				}
 				written, err := client.Call(ctx, runner.Request{Op: "write", Execution: cfg.Execution, Epoch: before.Epoch, Sequence: 4, Data: data})
-				if err != nil || written.Code != "written" {
+				wantCode := "written"
+				if effect == "unknown" {
+					wantCode = "write_unknown"
+				}
+				if err != nil || written.Code != wantCode {
 					t.Fatalf("fixture write %s %v", written.Code, err)
 				}
 				_, err = client.Call(ctx, runner.Request{Op: "release", Execution: cfg.Execution, Epoch: before.Epoch})
@@ -271,6 +326,9 @@ func TestProtocolOutboxRecoveryNeverResends(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+			}
+			if effect == "retired" {
+				before.Protocol.Pending = nil
 			}
 			// This direct write changes only an owned fault-injection fixture; it
 			// deliberately bypasses the store to plant an already-committed snapshot.
@@ -283,13 +341,23 @@ func TestProtocolOutboxRecoveryNeverResends(t *testing.T) {
 			}
 			next := openHost(t, cfg)
 			var after sessionhost.State
-			if effect == "written" {
+			if effect == "written" || effect == "retired" {
 				after = await(t, next, "one", "applied")
 				if !after.Records[0].NativeAccepted || len(after.Protocol.Pending) != 0 {
 					t.Fatal("written receipt was not reconciled")
 				}
+			} else if effect == "intent" {
+				after = awaitProtocol(t, next, "pre-Prepare intent closed", func(s sessionhost.State) bool { return s.Fence == "unknown" && s.InputState == sessionhost.InputIdle })
+				time.Sleep(30 * time.Millisecond)
+				after = next.Snapshot()
+				if after.Records[0].State != "unknown" || len(after.Protocol.Pending) != 0 {
+					t.Fatal("pre-Prepare intent was submitted")
+				}
 			} else {
 				wantReceipt := "write_missing"
+				if effect == "unknown" {
+					wantReceipt = "write_unknown"
+				}
 				if effect == "conflict" {
 					wantReceipt = "sequence_conflict"
 				}
@@ -304,7 +372,7 @@ func TestProtocolOutboxRecoveryNeverResends(t *testing.T) {
 				}
 			}
 			want := 4
-			if effect == "missing" {
+			if effect == "missing" || effect == "intent" {
 				want = 3
 			}
 			status := inspectRunner(t, cfg)
@@ -319,6 +387,71 @@ func TestProtocolOutboxRecoveryNeverResends(t *testing.T) {
 			snapshot.Protocol.Pending = nil
 			if !json.Valid(next.Snapshot().Protocol.Checkpoint) {
 				t.Fatal("snapshot aliases private checkpoint")
+			}
+		})
+	}
+}
+
+// A live child closing only stdout must permanently close automatic delivery,
+// including host replacement. The ordinary live-output variant delivers once.
+func TestProtocolLiveOutputTermination(t *testing.T) {
+	for _, ended := range []bool{false, true} {
+		t.Run(fmt.Sprint(ended), func(t *testing.T) {
+			mode := "normal"
+			if ended {
+				mode = "eof-live"
+			}
+			cfg, _, dir := setupProtocol(t, mode)
+			h := openHost(t, cfg)
+			awaitProtocol(t, h, "initial idle", func(s sessionhost.State) bool { return s.InputState == sessionhost.InputIdle })
+			initial := inspectRunner(t, cfg)
+			if ended {
+				if err := os.WriteFile(filepath.Join(dir, "close-output"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				awaitProtocol(t, h, "EOF closes fence", func(s sessionhost.State) bool {
+					return s.Fence == "unknown" && s.InputState == sessionhost.InputUnknown
+				})
+				if st := inspectRunner(t, cfg); st.Exited || !st.OutputEnded {
+					t.Fatalf("EOF confused with process exit: %+v", st)
+				}
+			}
+			if _, err := h.Enqueue(sessionhost.Notice{ID: "one", Reference: "synthetic/one"}); err != nil {
+				t.Fatal(err)
+			}
+			if !ended {
+				await(t, h, "one", "applied")
+			}
+			h.Close()
+			next := openHost(t, cfg)
+			if ended {
+				awaitProtocol(t, next, "restored EOF fence", func(s sessionhost.State) bool {
+					return s.Fence == "unknown" && s.InputState == sessionhost.InputUnknown
+				})
+				if err := next.Fence(true); err == nil || err.Error() != "reconciliation_required" {
+					t.Fatalf("EOF released: %v", err)
+				}
+				if _, err := next.Enqueue(sessionhost.Notice{ID: "two", Reference: "synthetic/two"}); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(50 * time.Millisecond)
+				if s := next.Snapshot(); s.Records[0].State != "queued" || s.Records[1].State != "queued" {
+					t.Fatal("EOF dispatched queued input")
+				}
+			} else {
+				awaitProtocol(t, next, "live restored idle", func(s sessionhost.State) bool { return s.InputState == sessionhost.InputIdle })
+				if _, err := next.Enqueue(sessionhost.Notice{ID: "two", Reference: "synthetic/two"}); err != nil {
+					t.Fatal(err)
+				}
+				await(t, next, "two", "applied")
+			}
+			after := inspectRunner(t, cfg)
+			want := initial.Writes
+			if !ended {
+				want += 2
+			}
+			if after.Writes != want || after.PID != initial.PID || after.Instance != initial.Instance || after.Exited {
+				t.Fatalf("unexpected post-replacement effects: %+v", after)
 			}
 		})
 	}

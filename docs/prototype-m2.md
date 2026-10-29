@@ -89,7 +89,7 @@ session and optional turn. Only a matching successful completion changes a
 synthetic notice to `applied` with outcome `completed`. This proves no mailbox
 receipt, task acceptance or goal completion.
 
-Runner protocol version 2 advertises write-receipt version 1. An authenticated
+Runner protocol version 3 advertises write-receipt version 1. An authenticated
 `write-receipt` query supplies a sequence and exact payload digest. It only observes
 `written`, `write_unknown`, `write_missing` or `sequence_conflict`; it never reserves
 a sequence or writes absent input. A restored host uses this read-only operation
@@ -108,7 +108,11 @@ transport, failed/interrupted turns and EOF never silently become idle or retry.
 The retained prefix is not rotated; exhaustion currently closes delivery.
 
 The worker polls nonblocking status and reads only an existing output suffix.
-Ordinary idle time therefore does not trigger a blocking-read timeout. No host
+Ordinary idle time therefore does not trigger a blocking-read timeout. Output EOF
+or collector read failure is independently exposed as `output_ended`, even if the
+child remains alive with stdin open. The runner latches writes closed, tail reads
+return promptly, and the host closes its durable fence across replacement. Older
+runner protocol versions cannot prove this observation and are refused. No host
 state lock spans runner I/O. An already issued write cannot be retracted by a
 concurrent hold or stop; durable stop/security intent prevents subsequent writes.
 
@@ -167,6 +171,10 @@ Tests cover ordered handshake, opaque selections, acceptance/completion separati
 unsupported operations, approval without response, identity mismatch, bounds,
 corrupt/partial checkpoint recovery, retained-tail catchup, known-idle replacement,
 and written/missing/conflicting outbox recovery with real synthetic children.
+Additional fixtures cover actual failed-write unknown receipts, pre-Prepare
+durable intent, receipt retirement before catch-up, protocol security STOP, stored
+boundary/release refusal and runner-version mismatch. A live child closing stdout
+without exiting closes delivery across replacement, paired with live output.
 Two isolated control plants intentionally resend missing input and infer completion
 from acceptance; each fails the specific negative assertion. Source is restored
 after those controls. Existing fixture/security/lifecycle tests remain applicable.

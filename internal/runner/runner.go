@@ -23,7 +23,7 @@ import (
 const MaxOutput = 32 << 10
 const MaxWrites = 128
 
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 const WriteReceiptVersion = 1
 
 type Plan struct {
@@ -58,6 +58,7 @@ type Response struct {
 	Epoch               uint64 `json:"epoch"`
 	PID                 int    `json:"pid"`
 	Exited              bool   `json:"exited"`
+	OutputEnded         bool   `json:"output_ended"`
 	ExitCode            int    `json:"exit_code"`
 	Data                []byte `json:"data,omitempty"`
 	Offset              int    `json:"offset"`
@@ -96,6 +97,7 @@ type Server struct {
 	changed     chan struct{}
 	blocked     bool
 	overflow    bool
+	outputEnded bool
 	exited      bool
 	waitUnknown bool
 	exitCode    int
@@ -191,6 +193,10 @@ func (s *Server) collect(stdout io.ReadCloser) {
 			break
 		}
 	}
+	s.mu.Lock()
+	s.outputEnded, s.blocked = true, true
+	s.changedLocked()
+	s.mu.Unlock()
 	stdout.Close()
 }
 
@@ -306,7 +312,7 @@ func (s *Server) handle(conn *net.UnixConn) {
 
 func (s *Server) snapshotLocked(code string) Response {
 	return Response{ProtocolVersion: ProtocolVersion, WriteReceiptVersion: WriteReceiptVersion, Code: code, Instance: s.instance, Epoch: s.epoch, PID: s.pid,
-		Exited: s.exited, ExitCode: s.exitCode, Offset: len(s.output), Overflow: s.overflow, Writes: len(s.writes)}
+		Exited: s.exited, OutputEnded: s.outputEnded, ExitCode: s.exitCode, Offset: len(s.output), Overflow: s.overflow, Writes: len(s.writes)}
 }
 
 func (s *Server) process(conn *net.UnixConn, req Request) Response {
@@ -451,7 +457,7 @@ func (s *Server) read(req Request) Response {
 			s.mu.Unlock()
 			return response
 		}
-		if req.Offset < len(s.output) || s.exited {
+		if req.Offset < len(s.output) || s.exited || s.outputEnded {
 			response := s.snapshotLocked("ok")
 			response.Data = bytes.Clone(s.output[req.Offset:])
 			s.mu.Unlock()

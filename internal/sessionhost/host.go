@@ -240,7 +240,7 @@ func Open(cfg Config) (*Host, error) {
 			state.Fence = "unknown"
 		}
 	}
-	if claim.Exited || claim.Overflow {
+	if claim.Exited || claim.Overflow || (protocol && claim.OutputEnded) {
 		state.Fence = "unknown"
 	}
 	if protocol && (claim.Writes > int(state.Protocol.WireSequence) || outputOffset > uint64(claim.Offset)) {
