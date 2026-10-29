@@ -28,6 +28,12 @@ nor claims that fixture model forwarding satisfies them.
 - Adapter implementations encode a notice and observe the matching synthetic
   acknowledgement. JSON and tab-separated line adapters plug into the same
   interface; core contains no Codex or other harness-specific types.
+- Adapter input observations are `idle`, `busy`, `draft`, `approval`, `unknown`
+  or `security-stop`. Delivery requires explicit idle evidence as well as the
+  manual fence. Absent/unrecognized evidence becomes unknown. Security STOP is
+  durably latched; later idle, release and host replacement cannot clear it.
+  These are fixture observations, not a real harness readiness parser. A changed
+  observation cannot retract a write that has already been issued.
 - Opaque vendor/model/reasoning strings are passed to the adapter byte-for-byte.
   The scalar grammar only bounds shape: `[A-Za-z0-9._:/@+-]{1,128}`. There is no
   catalog, ranking, model fallback or assertion of provider support.
@@ -42,8 +48,8 @@ account, credential, profile or daemon is provisioned.
 ## Durable state and delivery
 
 `state.json` has a closed version-1 shape: execution, public runner instance,
-adapter name, selection, controller epoch, sequence, fence, stop intent and
-retained records. Records contain ID/reference, intent digest, sequence and
+adapter name, selection, controller epoch, sequence, fence, stop intent, retained
+records, input observation and the security-stop latch. Records contain ID/reference, intent digest, sequence and
 `queued`, `unknown` or `applied`. They contain no mailbox body, arbitrary prompt,
 child argv/environment or encoded adapter stream. This is a bounded snapshot
 journal, not a complete append-only transition audit or a secret classifier.
@@ -75,6 +81,10 @@ The runner stores each write sequence/digest before touching stdin. Exact retry
 returns its recorded result without another write; changed bytes under the same
 sequence conflict. Partial/failed writes close subsequent writes. Output loss
 or overflow is explicit and never a successful acknowledgement.
+
+Shutdown closes admission under the same lock used to register accepted
+connections. A connection accepted before closure but registered afterwards is
+closed without becoming a controller; a claim after shutdown is refused.
 
 ## Process model and limits
 
@@ -131,7 +141,8 @@ swarma-session-runner -socket /private/path/runner.sock \
 swarma-session-host serve -socket /private/path/host-1.sock \
   -runner /private/path/runner.sock -state /private/path/state \
   -execution fixture-execution -adapter json-fixture \
-  -vendor future-vendor -model unlisted-model -reasoning new-effort -io-timeout 2s
+  -vendor future-vendor -model unlisted-model -reasoning new-effort \
+  -input-state idle -io-timeout 2s
 swarma-session-host request -socket /private/path/host-1.sock \
   -timeout 2s < fixture-request.json
 ```
@@ -148,6 +159,12 @@ Operations are `status`, `enqueue`, `hold`, `release` and `stop`. Responses carr
 closed codes and a bounded state snapshot. JSON response receipt is not an a2a
 inbox receipt, a processed real agent turn or a goal-completion verdict.
 
+The CLI requires `-input-state idle` to permit fixture delivery; its absent
+default is unknown. Other fixture states keep input ineligible, and
+`security-stop` latches. The state is fixed for that CLI incarnation. Embedded
+fixture adapters can update observations and call `ObserveInput` to wake queued
+work. Real harness observation must be separately qualified.
+
 ## Evidence required
 
 Run package tests and race detection plus both process-smoke protocols. Tests
@@ -157,6 +174,19 @@ queue/output pressure, explicit-stop persistence, and full acknowledgement
 selection binding. A fabricated noncredential canary checks the wire-to-state
 boundary; it does not demonstrate general credential detection. Cross-UID
 rejection and actual kernel PID reuse are not simulated into passing claims.
+
+`TestDispatchCrashBoundaries` uses real owned-host SIGKILL at three deterministic
+barriers: after the in-flight record commits, after the runner accepts bytes but
+before the host receives the write reply, and after a complete matching fixture
+ack but before receipt commit. Test-only adapter wrappers and a Unix proxy
+provide these barriers without production fault flags. Both encodings must keep
+the same runner/child, exact bounded write count, retained unknown record and
+refused replay/release. The already-applied path is the positive control.
+`TestShutdownRejectsLateRegistration` pauses a real accepted connection before
+registration, queues its claim, closes the runner and resumes registration with
+the client left open; the ordinary live registration is its paired control.
+Eligibility negatives observe a bounded live dispatch window and drain the host
+before checking zero writes; idle supplies the successful control.
 
 Bounded negative control plants must demonstrate that the stale-write and
 changed-selection checks detect their named violations. A first failing smoke

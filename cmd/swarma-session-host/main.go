@@ -37,12 +37,13 @@ func main() {
 func serve(args []string) int {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
 	var cfg sessionhost.Config
-	var socket, adapter string
+	var socket, adapter, inputState string
 	flags.StringVar(&socket, "socket", "", "absolute private host socket")
 	flags.StringVar(&cfg.Socket, "runner", "", "absolute runner socket")
 	flags.StringVar(&cfg.StateDir, "state", "", "absolute private state directory")
 	flags.StringVar(&cfg.Execution, "execution", "", "fixture execution identifier")
 	flags.StringVar(&adapter, "adapter", "", "json-fixture or line-fixture")
+	flags.StringVar(&inputState, "input-state", "", "explicit synthetic input state; idle permits delivery")
 	flags.StringVar(&cfg.Selection.Vendor, "vendor", "", "opaque fixture selection")
 	flags.StringVar(&cfg.Selection.Model, "model", "", "opaque fixture selection")
 	flags.StringVar(&cfg.Selection.Reasoning, "reasoning", "", "opaque fixture selection")
@@ -59,6 +60,7 @@ func serve(args []string) int {
 	default:
 		fail("unsupported_fixture_adapter", 2)
 	}
+	cfg.Adapter = fixtureadapters.Gated{Adapter: cfg.Adapter, State: sessionhost.InputState(inputState)}
 	listener, err := localipc.Listen(socket)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "host_control_unavailable")

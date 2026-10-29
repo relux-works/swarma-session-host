@@ -32,8 +32,31 @@ type Notice struct {
 	Reference string `json:"reference"`
 }
 
+// InputState is a conservative observation, not proof of real harness readiness.
+// An adapter must supply idle explicitly; missing or unrecognized evidence closes input.
+type InputState string
+
+const (
+	InputIdle         InputState = "idle"
+	InputBusy         InputState = "busy"
+	InputDraft        InputState = "draft"
+	InputApproval     InputState = "approval"
+	InputUnknown      InputState = "unknown"
+	InputSecurityStop InputState = "security-stop"
+)
+
+func validInputState(s InputState) bool {
+	switch s {
+	case InputIdle, InputBusy, InputDraft, InputApproval, InputUnknown, InputSecurityStop:
+		return true
+	}
+	return false
+}
+
 type Adapter interface {
 	Name() string
+	// InputState returns a bounded local snapshot; it must not block on I/O.
+	InputState() InputState
 	Encode(Notice, Selection) ([]byte, error)
 	// Applied inspects the bounded complete output prefix. Missing evidence is
 	// false; malformed evidence is an error, not permission to retry delivery.
@@ -48,16 +71,18 @@ type Record struct {
 }
 
 type State struct {
-	Version        int       `json:"version"`
-	Execution      string    `json:"execution"`
-	RunnerInstance string    `json:"runner_instance"`
-	Adapter        string    `json:"adapter"`
-	Selection      Selection `json:"selection"`
-	Epoch          uint64    `json:"epoch"`
-	Sequence       uint64    `json:"sequence"`
-	Fence          string    `json:"fence"`
-	Records        []Record  `json:"records"`
-	StopRequested  bool      `json:"stop_requested"`
+	Version         int        `json:"version"`
+	Execution       string     `json:"execution"`
+	RunnerInstance  string     `json:"runner_instance"`
+	Adapter         string     `json:"adapter"`
+	Selection       Selection  `json:"selection"`
+	Epoch           uint64     `json:"epoch"`
+	Sequence        uint64     `json:"sequence"`
+	Fence           string     `json:"fence"`
+	Records         []Record   `json:"records"`
+	StopRequested   bool       `json:"stop_requested"`
+	InputState      InputState `json:"input_state"`
+	SecurityStopped bool       `json:"security_stopped"`
 }
 
 type Config struct {
@@ -116,7 +141,7 @@ func Open(cfg Config) (*Host, error) {
 		return nil, errors.New("stored_plan_conflict")
 	}
 	if !exists {
-		state = State{Version: 1, Execution: cfg.Execution, Adapter: cfg.Adapter.Name(), Selection: cfg.Selection, Fence: "held"}
+		state = State{Version: 1, Execution: cfg.Execution, Adapter: cfg.Adapter.Name(), Selection: cfg.Selection, Fence: "held", InputState: InputUnknown}
 	}
 	state.Epoch++
 	if state.Epoch == 0 {
@@ -168,6 +193,12 @@ func Open(cfg Config) (*Host, error) {
 	}
 	workCtx, workCancel := context.WithCancel(context.Background())
 	h := &Host{cfg: cfg, store: store, client: client, state: state, ctx: workCtx, cancel: workCancel, kick: make(chan struct{}, 1)}
+	if err := h.ObserveInput(); err != nil {
+		h.cancel()
+		client.Close()
+		store.close()
+		return nil, err
+	}
 	h.wg.Add(1)
 	go h.dispatch()
 	h.wake()
@@ -223,6 +254,9 @@ func (h *Host) Enqueue(notice Notice) (Record, error) {
 	if h.state.StopRequested {
 		return Record{}, errors.New("session_stopped")
 	}
+	if h.state.SecurityStopped {
+		return Record{}, errors.New("security_stopped")
+	}
 	if len(h.state.Records) >= MaxRecords {
 		return Record{}, errors.New("queue_capacity_exceeded")
 	}
@@ -238,6 +272,9 @@ func (h *Host) Enqueue(notice Notice) (Record, error) {
 }
 
 func (h *Host) Fence(open bool) error {
+	if err := h.ObserveInput(); err != nil {
+		return err
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.ctx.Err() != nil {
@@ -249,6 +286,12 @@ func (h *Host) Fence(open bool) error {
 	if open && h.state.StopRequested {
 		return errors.New("session_stopped")
 	}
+	if open && h.state.SecurityStopped {
+		return errors.New("security_stopped")
+	}
+	if open && h.state.InputState != InputIdle {
+		return errors.New("input_ineligible")
+	}
 	next := h.state
 	next.Fence = "held"
 	if open {
@@ -258,6 +301,38 @@ func (h *Host) Fence(open bool) error {
 		return err
 	}
 	h.wake()
+	return nil
+}
+
+// ObserveInput refreshes adapter evidence and wakes queued work. Security STOP is
+// durable and cannot be cleared by idle evidence, fence release or host restart.
+// Like holding the manual fence, a new observation cannot retract an issued write.
+func (h *Host) ObserveInput() error {
+	if err := h.observeInput(); err != nil {
+		return err
+	}
+	h.wake()
+	return nil
+}
+
+func (h *Host) observeInput() error {
+	observation := h.cfg.Adapter.InputState()
+	if !validInputState(observation) {
+		observation = InputUnknown
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ctx.Err() != nil || h.err != nil {
+		return errors.New("host_unavailable")
+	}
+	next := h.state
+	next.InputState = observation
+	next.SecurityStopped = next.SecurityStopped || observation == InputSecurityStop
+	if next.InputState != h.state.InputState || next.SecurityStopped != h.state.SecurityStopped {
+		if err := h.persistLocked(next); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -282,8 +357,11 @@ func (h *Host) dispatch() {
 }
 
 func (h *Host) deliverNext() bool {
+	if err := h.observeInput(); err != nil {
+		return false
+	}
 	h.mu.Lock()
-	if h.ctx.Err() != nil || h.err != nil || h.state.Fence != "open" {
+	if h.ctx.Err() != nil || h.err != nil || h.state.Fence != "open" || h.state.InputState != InputIdle || h.state.SecurityStopped {
 		h.mu.Unlock()
 		return false
 	}
@@ -329,6 +407,9 @@ func (h *Host) deliverNext() bool {
 				}
 			}
 		}
+	}
+	if err := h.observeInput(); err != nil {
+		return false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
