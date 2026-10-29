@@ -1,88 +1,75 @@
 # swarma-session-host
 
-The session host keeps agent sessions running in the background: it starts a harness (Claude Code, Codex, Muse) in a given directory, lets a person attach and detach, delivers messages into a running session, and reports what happens. A goal is optional. The module must work without goals, a board, an orchestrator or their toolchain; task-board is an optional client of its generic goal interface. Today this job is done by the board's in-tree session package (private source). This repository is where it becomes its own module.
+A small, pluggable host for agent sessions on macOS. The host manages input
+intent, receipts and controller ownership; a separate runner owns one child
+process and its stdio transport. Agent environments belong in adapters. Vendor,
+model and reasoning selections are opaque strings, with no model catalog in
+host core.
 
-**Revision:** accepted architecture-review findings (2026-10-13): complete signed-intent retry binding, retained producer/aggregate storage accounting with protected control reserve, positive placement/role eligibility and inert exact-candidate review. Optional reviewer policies remain unchosen and off; publication and qualification remain gates (§§3.1–3.5, 3.7; §7.19–22).
+**Current scope: M1 fixture prototype.** Two synthetic adapters exercise the same
+core using JSON and line protocols. No real Codex, Claude Code or Muse session
+is launched. This is a fresh implementation; it does not extract or reuse the
+board session daemon.
 
-**Revision:** accepted architecture-review findings (2026-10-13): protected exec-policy pins and input qualification, mode-aware transfer and bounded cleanup/repair, v0 watcher/status-only alerts and direct node-stop progress. Publication and qualification remain gates; v1 freeze and optional standing discard remain open.
+The runnable prototype covers bounded input and output, private Unix sockets,
+controller epochs, durable queued/unknown/applied receipts, exact retry,
+changed-intent conflict, owned-child stop and host replacement. See the
+[M1 contract and limitations](docs/prototype-m1.md).
 
-**Revision:** wave 5b (2026-10-13): web default-off, trusted-circle opt-ins and task resources; corrected stop/write-fence figures and hosted-launch r6 input.
+The next slices are a real Codex adapter, then a qualified launch through
+Curator and the launcher, followed by Claude Code. Real launch integration needs
+the jointly accepted model-configuration and plan/process-proof contracts. The
+fixture protocol is not a replacement for the launcher's closed plugin schema,
+home leases or current admission requirements.
 
-**Status: design.** No code has been moved yet. The plan is in [`spec/session-host.md`](spec/session-host.md):
+## Build and verify
 
-1. **Extraction as it is (SH1).** The provider hosts (Claude PTY, Codex app-server, Muse), the goal and notice delivery, transcripts, records and the daemon skeleton move here with no change in behaviour; task-board reaches them through a thin seam; task-board's existing session, goal and notice suites are the gate.
-2. **Platform canons (SH2+).** Then the host is brought to the platform's rules: the `swarma-session-host` service owns durable state, fences and input admission; one `swarma-session-runner` per session owns the PTY master or private Codex app-server transport under `worker-<label>`, started by `swarma-user-launcher` through `swarma-dispatcher`. The dispatcher stops executions through `swarma-user-manager`'s `exec.stop`. Peer credentials, per-session capabilities, parking and controlled restart are activation gates.
+Go 1.25.5 and Python 3 are required. Run from the repository root on macOS:
 
-For now, only the board/orchestrator for board goals, or the launching caller at start through the launcher, authors a session goal. The agent account has no goal capability on the host socket. This keeps authorship with the initiating caller while the bounds of an agent namespace await design. A separate SH2+ item will choose between agent self-goals in a separate namespace and retaining caller/board authorship only; this does not block a goal-free host.
+```sh
+mkdir -p .temp/prototype/bin .temp/prototype/evidence
+GOTOOLCHAIN=local GOWORK=off go build -p 1 -o .temp/prototype/bin/ ./cmd/...
+GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go vet -p 1 ./...
+GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 ./...
+python3 .scripts/prototype-smoke.py \
+  --bin-dir .temp/prototype/bin --report-dir .temp/prototype/evidence
+```
 
-The host-socket goal-client actions and capability shape remain unpublished. The per-session nudge or wake budget source and its default without a board are unspecified, as is an agent "done" proposal path without a board. With a board, an agent outcome is only a proposal to the board owner; any future proposal path must not mutate a goal (D-GOALS). See spec §3.8 and §7.
+The smoke starts only its own synthetic processes, records their PIDs, kills
+one owned host per protocol, reconnects a new host to the same runner/child,
+checks retry and stale-epoch rejection, and confirms owned-child exit. Both
+protocol lanes run even if one fails. Reports and bounded fixture logs go under
+`.temp/prototype/evidence/`; temporary private socket/state directories under
+`/tmp/session-smoke-*` are removed after the run. No credentials, profiles,
+accounts or shared services are accessed.
 
-In the gated SH2+ launch path (R-START/R-SESSION), the owner's admitted start can carry **session lifecycle authorisation** for successors; its member format is unpublished. The dispatcher owns a durable **host admission permit** for one `logical_session_id`. Every physical start has its own `(execution_id, controller_epoch, op_id)` claim, fence and same-effect/root-receipt interlock. The host prepares durable intent and a closed fence, then sends `host_start` in `dispatch-op/1` with the four fixed request values. Only the dispatcher invokes `swarma-user-launcher`. Successors require the owner's lifecycle authorisation, an active owner and fresh authority checks, confirmed absence of the previous claim, the same allocation/generation and unchanged stored plan; replay of `(logical_session_id, op_id)` returns the same successor. A one-start request admits no successor. The host gains no caller chain or spawn/lease grant; the original owner's ancestry remains. Ordinary successors cannot extend allocation lifetime or reset runtime budgets (§3.3).
+## Tools
 
-Controlled restart, park of a wedged execution and emergency stop use `host_stop` in `dispatch-op/1`. Only the configured host principal may stop an execution under its permit, through the journaled E-stop path (`exec.stop`, confirmed absence). It is recorded as host-requested, distinct from owner `cancel`, and grants no start authority. The user manager owns the single account-wide termination scope, latest-execution receipt fence and quiet-period absence proof (F-13). The fresh runner separately checks native-lock absence under the agent account and closed delivery fence before harness initialisation/resume; an unknown result stays parked. Current-epoch registration and readiness precede delivery; ambiguous starts resolve the same effect/receipt, never a second launch. Joint formats and crash ordering remain publication gates (§7).
+| Tool | Purpose and entry point | Outputs |
+| --- | --- | --- |
+| Go 1.25.5 | `go build -p 1 -o .temp/prototype/bin/ ./cmd/...`; `go vet -p 1 ./...`; `go test -p 1 -race -count=1 ./...` | Binaries in `.temp/prototype/bin/`; test results on stdout |
+| gofmt | `gofmt -l cmd internal` | Paths requiring formatting on stdout |
+| Python 3 | `python3 .scripts/prototype-smoke.py --bin-dir .temp/prototype/bin --report-dir .temp/prototype/evidence` | Per-lane reports and fixture logs in the explicit report directory |
+| swarma-session-runner | `.temp/prototype/bin/swarma-session-runner -socket PATH -execution ID -io-timeout 1s < plan.json` | Own child/stdin/stdout and a private control socket; bounded metadata on stdout |
+| swarma-session-host | `.temp/prototype/bin/swarma-session-host serve ...`; `request -socket PATH -timeout 2s < request.json` | Private state snapshots and bounded JSON responses; [complete flags](docs/prototype-m1.md#commands) |
+| session-fixture | `.temp/prototype/bin/session-fixture -protocol json` or `-protocol line` | Synthetic acknowledgements on stdout |
+| Git | `git rev-parse HEAD`; `git log --show-signature -1` | Revision and signature evidence on stdout |
+| Historical SH1 tools | See [archived extraction tooling](docs/sh1-gate.md) | Historical fixture/gate reports; not a prototype dependency or acceptance proof |
 
-The dispatcher is a Unix-socket service from its first protected-launch slice (F-5). Once state ownership, compatible schema, journal replay and authentication/indexes are sound, authorised control, observation, reconciliation and already-authorised stop remain reachable while forward admission is closed (F-15). Unknown records retain their claims. Unrelated admission needs complete accounting and proof of confinement; unbounded shared uncertainty, maintenance or restore keeps forward admission closed node-wide. There is no command fallback (§3.3).
+The existing SH1 workflows are awaiting a separate transition to secret-free
+module CI. They are not prototype acceptance evidence; publication must follow
+that transition. Outstanding integration and repository-owner actions are in
+[UNRESOLVED_QUESTIONS.md](UNRESOLVED_QUESTIONS.md).
 
-The host service has deny-all network egress, including loopback TCP (R-SVC-EGRESS); readiness requires the user manager's verified v1 service-profile row, parent anchor and qualified resolver restriction. Periodic re-verification has a detection window. Runner survival and the affected set on service replacement follow the user manager's §7 **fate table** (R-FATE), with a durable daemon-instance fence against surviving dispatcher writers; deployment defaults do not prove survival. The host MUST never hold its state lock across a synchronous call to another platform service (R-LOCK): durable per-record in-flight markers preserve ownership, and stale results cannot reopen delivery. See spec §§3.1–3.5 and the [host wait/lock graph](diagrams/host-wait-lock.puml).
+[Module CI](.github/workflows/module.yml) runs Go 1.25.5 module vet and race
+tests on GitHub-hosted macOS, using only this public repository. Both checks
+run even if one fails. Historical extraction workflows are retired.
 
-Spec §3.1 references E-rebind and broker **binding replacement** (R-REBIND), fresh random 128-bit generations and fail-closed ledger restore (R-GEN), and the authenticated or operator-controlled time source and authority-narrowing clock rules (R-TIME). Expiry-driven destruction also requires real boot-inclusive monotonic elapsed time; wedge deadlines never impose standing-session expiry (§3.7). Across isolated accounts a child gets a standalone repository materialized by the dispatcher’s workspace contract with its own `.git`, fresh local configuration, no hooks, no remotes and no credential helpers; linked worktrees remain within one account, including today's board workflow (F-16).
+## Design history and license
 
-For trusted standing agents, the executor checks plan-provided settings, hooks, MCP configuration and instruction-file digests before every launch, restart and native resume, or supplies them from a root-owned location outside the home (R-STANDING). Drift refuses the launch and is reported; repair is explicit re-materialization and the refusal code is unpublished. Same-machine native resume trusts non-breaking harness semver changes: the same major, and for 0.x the same minor, with the continuity preconditions in spec §3.5. A different major or 0.x minor is refused. A harness resume failure is reported as `resume-failed` to the caller, which decides the next action; there is no automatic fallback or portable seed on this path.
+[spec/session-host.md](spec/session-host.md) distinguishes the current prototype
+from the superseded extraction design. Existing [diagrams](diagrams/README.md)
+and [hosted-launch notes](docs/inputs/hosted-launch-contract-r6.md) remain design
+history; they do not establish implemented capabilities.
 
-For SH2+, the owner decision of 2026-10-12 gives trusted-class standing sessions (the orchestrator and standing team members) and their executions no preset lifetime or runtime limit. Only an explicit stop, operator action (including emergency stop) or its own exit ends a standing session. Park and controlled restart preserve the session; restart replaces its execution. The dispatcher's 12-hour runtime maximum applies only to non-standing executions. Operator maintenance uses the dispatcher's bounded maintenance stop (R-MAINT, dispatcher §11): close admission, inventory, stop selected executions through `exec.stop` with explicit operator authority, then require confirmed absence and reconciliation before mode/state/binary changes. Its deadline bounds the attempt, never the session lifetime; unknown or refused stop defers maintenance. Standing allocations and identities remain; R-MAINT withdraws the permit, so restart needs fresh owner admission; there is no live supervisor adoption or automatic expiry. Recovery controls remain reachable while forward admission is closed. See spec §3.5 and §3.7; the runtime-policy wire format remains unpublished.
-
-The owner decisions of 2026-10-13 apply to SH2+ (§§3.1–3.5, 3.7). **R-UNTRUSTED/R-STANDING:** an untrusted standing placement is a workplace with its agent loop at the donor, never a host session; class is recorded at registration/admission, never inferred from a name. Workplaces have zero egress, no subscription binding or lease, and no shared services on their host. Every workplace is untrusted-class unless its remote worker is admitted to the trusted circle by an operator act. Membership permits donor-side opt-ins only and preserves all host boundaries, including reviewer and host-loop eligibility. Host loops require trusted class and local agent placement with admitted launch authority; remote placements remain workplaces. Review requires an independent positive role grant and the §3.5 class/placement/producer predicates; membership alone is insufficient. Optional local-only reviewer and requester-exclusion policies stay open and off. Local trusted sessions have provider-only bound-proxy egress. Web search/fetch is default-off for every agent (R-NET-TOOL): by default the donor loop reaches only model-provider endpoints and our host, with provider-side search disabled by CIP-0008 and no donor-side web server. Web tools are explicit per-identity opt-ins for the trusted circle only, never the untrusted class. Tasks carry trusted-side gathered and checked resources, materialized read-only beside the workspace with digests in the plan, and also attached to remote signed task letters; these are data, never instructions. Workers request more through letters/outcomes and never fetch. No `direct` or `external-http-proxy` binds on a platform host. Network-profiles N15 owns one bound listener per account generation, own-port-only rules and attributable caps/logs. R-CEILINGS admits by each host’s qualified OS capability matrix, without excluding macOS by name. R-RANGE-DENY and R-SOCKETS require active range-precedence and socket-reachability evidence.
-
-**R-TRANSFER:** approved child-UID executors materialize and export under the dispatcher’s workspace contract; the host gains no transfer authority. Code leaves only as data after account-wide confirmed absence and any workplace write fence. Deletion requires digest/size-verified durable custody of the result and all blobs outside the home, or a per-act operator waiver. Cleanup export uses bounded original-admission consent and distinct execution evidence, never an R-SESSION permit. Deterministic refusal retains the obligation; same-workspace repair needs current authority and a plan-bounded new round. Unknown export stays pending, and standing discard is unchosen and off. The manifest compares both mode and content identity, including mode-only edits, regular/symlink transitions and prior deletion modes. The board accepts a resource, and its change-request machinery owns deterministic import, exact signed candidate review and integration, executed by the orchestrator. Unaccepted candidate files stay untrusted review data: exact-C diffs/blobs are read-only digest-bound resources outside harness discovery roots. Tree entry in a discovery-capable harness requires a qualified strict-context adapter; acknowledgement and acceptance never admit control surfaces. Rework is a new admitted run on the last candidate with findings in the task snapshot. Worker accounts never push or open merge requests. See the [transfer and verification figure](diagrams/workspace-transfer.puml).
-
-**R-EXEC/R-VERIFY:** the runner starts only the admitted harness under an OS executable allowlist. Protected machine policy selects and pins the exec-profile identity/body digest; the caller cannot choose authority through home configuration. Local light tools require complete-invocation and interpreted-input qualification; unprovable profiles route to off-host verification. Builds, tests and worker-code execution run only on another machine in isolated ephemeral runners without secrets, with controlled dependency egress; results are data in the board’s testing state. A tester orchestrates and reads them. R-WATCH v0 requests a journaled dispatcher stop and retains the affected session’s closed delivery/admission hold, with durable reason and status-only observer reads; no phone alert or per-account egress freeze is promised. The v1 freeze lifecycle remains open. Containment never waits for notification. **R-ALLSTOP** is one manual operator act delivered directly to each service. Range denial, broker freeze and host closure issue promptly and independently; receiver launch/create/activation fencing precedes absence scans, and process stops never wait for containment replies. The operator helper path can progress while the dispatcher is unavailable. The host closes every session’s delivery and snapshots bound boards. Already-delivered tokens keep vendor lifetime. Fences remain until confirmed absence; all durable parts, including dispatcher reconciliation, are required before whole-act success or explicit recovery. Recovery names the stopped set and restart scope and preserves owner authority; partial/unknown results keep admission closed. See the [node-wide stop figure](diagrams/node-emergency-stop.puml). Formats, codes, caps, runner contracts and the per-host soft-ceiling decision remain open in spec §7.13–18.
-
-For gated SH2+, the unchanged `(principal, id)` claim stores/compares complete canonical signed intent via `envelope_digest` through host enqueue, deduplication and receipt lookup: exact-byte retry returns the original receipt; changed intent conflicts and requires a new ID. Host-owned output, input and evidence have per-session/principal byte/count and aggregate budgets, charged before durable acceptance. Retained debt survives replacement/retirement; bounded buffers and the dispatcher-output handoff preserve a protected control/evidence reserve. Budget pressure uses bounded refusal/backpressure or existing journaled park/stop, while incomplete evidence stays closed/unknown. Values, retention, schema and qualification are open in spec §7.19–22; no implementation is claimed.
-
-Design input: [hosted-launch contract r6 harvest](docs/inputs/hosted-launch-contract-r6.md), from agent-session-host PR #10 at its recorded head. Its task-board receiver is superseded by the swarma dispatcher path; the retained seam, admission-record and imported-Claude notes are input, not an activated contract.
-
-Related modules: [swarma-dispatcher](https://github.com/relux-works/swarma-dispatcher), [swarma-user-manager](https://github.com/relux-works/swarma-user-manager), [swarma-credential-broker](https://github.com/relux-works/swarma-credential-broker), [curator-agent-launcher](https://github.com/relux-works/curator-agent-launcher) (`curator-run`), [agent-session-bridge](https://github.com/relux-works/agent-session-bridge).
-
-Module CI runs `go vet -p 1 ./...` and
-`go test -p 1 -race -count=1 -timeout=5m ./...` with Go 1.25.5 on
-GitHub-hosted macOS. Both checks run even if one fails, and either failure
-fails the job. The workflow checks out only this public repository, uses pinned
-public actions, and does not use a private source checkout. Results appear in
-GitHub Actions; local verification prints to stdout. Historical SH1 extraction
-tools and invented fixtures remain documented in [docs/sh1-gate.md](docs/sh1-gate.md);
-their results are separate from module CI and do not qualify a real session host.
-
-Through C1 the board will consume the tagged public serving library while
-retaining the `tb-sessiond` executable and composition root. This module's
-private-fork cutover plan is superseded; the existing tooling does not establish
-extraction or runtime migration. Operator maintenance, quiescence and paired
-release identities remain required.
-
-The [figure index](diagrams/README.md) maps audit rows M-SH1–M-SH4 and the R-LOCK view M-SH5 to their
-PlantUML sources and defining spec sections:
-
-- **M-SH1:** [process/container ownership](diagrams/containers.puml) and
-  [logical components](diagrams/components.puml), with current/SH1 and gated
-  SH2+ boundaries.
-- **M-SH2:** [controller recovery and restart](diagrams/session-recovery.puml),
-  including confirmed-absence and unknown-outcome branches.
-- **M-SH3:** [session, execution, goal and wake states](diagrams/session-goal-wake-states.puml)
-  and [approval/receipt states](diagrams/approval-receipt-states.puml).
-- **M-SH4:** [storage ownership](diagrams/storage-layout.puml) and
-  [SH1 gate deployment](diagrams/sh1-gate-deployment.puml), separating the
-  current hosted prototype from the release gate.
-
-- **M-SH5:** [host wait/lock graph](diagrams/host-wait-lock.puml), showing local lock transitions and unlocked service waits.
-- **R-TRANSFER/R-VERIFY:** [workspace transfer](diagrams/workspace-transfer.puml), showing export, exact candidate review and admitted rework.
-- **R-ALLSTOP:** [node-wide emergency stop](diagrams/node-emergency-stop.puml), showing manual act, service journals and explicit recovery.
-
-The figures mark unpublished schemas explicitly and establish no runtime
-capability. Each links back to its defining specification sections.
-
-## Provenance
-
-Code will move here as a snapshot of the board's in-tree session package (private source) at a pinned private source commit (Apache-2.0), without the source repository's history. Each move will record its exact source pin in the private fork's provenance record. The NOTICE will keep the original attribution.
-
-## License
-
-Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE) for licensing and attribution.
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -1,0 +1,524 @@
+// Package runner owns the fixture child independently from host connections.
+package runner
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/relux-works/swarma-session-host/internal/localipc"
+)
+
+const MaxOutput = 32 << 10
+const MaxWrites = 128
+
+type Plan struct {
+	Binary string   `json:"binary"`
+	Args   []string `json:"args"`
+	Cwd    string   `json:"cwd"`
+	Env    []string `json:"env"`
+}
+
+type Config struct {
+	Socket    string
+	Execution string
+	Plan      Plan
+	IOTimeout time.Duration
+}
+
+type Request struct {
+	Op        string `json:"op"`
+	Execution string `json:"execution"`
+	Epoch     uint64 `json:"epoch"`
+	Sequence  uint64 `json:"sequence,omitempty"`
+	Data      []byte `json:"data,omitempty"`
+	Offset    int    `json:"offset,omitempty"`
+}
+
+type Response struct {
+	Code     string `json:"code"`
+	Instance string `json:"instance"`
+	Epoch    uint64 `json:"epoch"`
+	PID      int    `json:"pid"`
+	Exited   bool   `json:"exited"`
+	ExitCode int    `json:"exit_code"`
+	Data     []byte `json:"data,omitempty"`
+	Offset   int    `json:"offset"`
+	Overflow bool   `json:"overflow"`
+	Writes   int    `json:"writes"`
+}
+
+type writeRecord struct {
+	digest [32]byte
+	code   string
+}
+
+type Server struct {
+	cfg         Config
+	listener    *net.UnixListener
+	child       *os.Process
+	processMu   sync.Mutex
+	pid         int
+	stdin       *os.File
+	stdout      io.ReadCloser
+	instance    string
+	done        chan struct{}
+	outputDone  chan struct{}
+	closed      chan struct{}
+	closeOnce   sync.Once
+	closeErr    error
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	writeMu     sync.Mutex
+	owner       *net.UnixConn
+	conns       map[*net.UnixConn]bool
+	epoch       uint64
+	seq         uint64
+	writes      map[uint64]writeRecord
+	output      []byte
+	changed     chan struct{}
+	blocked     bool
+	overflow    bool
+	exited      bool
+	waitUnknown bool
+	exitCode    int
+}
+
+func (s *Server) ChildPID() int { return s.pid }
+
+func Start(cfg Config) (*Server, error) {
+	if cfg.Execution == "" || len(cfg.Execution) > 128 || cfg.IOTimeout <= 0 || cfg.IOTimeout > time.Minute ||
+		!filepath.IsAbs(cfg.Plan.Binary) || !filepath.IsAbs(cfg.Plan.Cwd) || cfg.Plan.Env == nil || len(cfg.Plan.Args) > 32 {
+		return nil, errors.New("invalid_runner_plan")
+	}
+	// Bind before child creation: an occupied endpoint must have no spawn effect.
+	listener, err := localipc.Listen(cfg.Socket)
+	if err != nil {
+		return nil, err
+	}
+	instance, err := randomInstance()
+	if err != nil {
+		listener.Close()
+		return nil, err
+	}
+	childIn, stdin, err := os.Pipe()
+	if err != nil {
+		listener.Close()
+		return nil, errors.New("child_pipe_failed")
+	}
+	defer childIn.Close()
+	stdout, childOut, err := os.Pipe()
+	if err != nil {
+		stdin.Close()
+		listener.Close()
+		return nil, errors.New("child_pipe_failed")
+	}
+	defer childOut.Close()
+	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		stdin.Close()
+		stdout.Close()
+		listener.Close()
+		return nil, errors.New("child_pipe_failed")
+	}
+	defer stderr.Close()
+	process, err := os.StartProcess(cfg.Plan.Binary, append([]string{cfg.Plan.Binary}, cfg.Plan.Args...),
+		&os.ProcAttr{Dir: cfg.Plan.Cwd, Env: cfg.Plan.Env, Files: []*os.File{childIn, childOut, stderr}})
+	if err != nil {
+		stdin.Close()
+		stdout.Close()
+		listener.Close()
+		return nil, errors.New("child_start_failed")
+	}
+	s := &Server{cfg: cfg, listener: listener, child: process, pid: process.Pid, stdin: stdin, stdout: stdout,
+		instance: instance, done: make(chan struct{}), outputDone: make(chan struct{}), closed: make(chan struct{}),
+		conns: make(map[*net.UnixConn]bool), writes: make(map[uint64]writeRecord), changed: make(chan struct{}), exitCode: -1}
+	s.wg.Add(3)
+	go s.collect(stdout)
+	go s.reap()
+	go s.accept()
+	return s, nil
+}
+
+func randomInstance() (string, error) {
+	// Public incarnation identifier, not an authentication credential.
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", errors.New("instance_generation_failed")
+	}
+	return hex.EncodeToString(value), nil
+}
+
+func (s *Server) changedLocked() {
+	close(s.changed)
+	s.changed = make(chan struct{})
+}
+
+func (s *Server) collect(stdout io.ReadCloser) {
+	defer s.wg.Done()
+	defer close(s.outputDone)
+	buffer := make([]byte, 4096)
+	for {
+		n, err := stdout.Read(buffer)
+		if n > 0 {
+			s.mu.Lock()
+			if len(s.output)+n > MaxOutput {
+				s.overflow, s.blocked = true, true
+			} else if !s.overflow {
+				s.output = append(s.output, buffer[:n]...)
+			}
+			s.changedLocked()
+			s.mu.Unlock()
+		}
+		if err != nil {
+			break
+		}
+	}
+	stdout.Close()
+}
+
+func (s *Server) reap() {
+	defer s.wg.Done()
+	// Nonblocking wait and signal share processMu. Until this code reaps the
+	// child its PID remains allocated, even after exit. This avoids Darwin's
+	// concurrent os.Process.Wait/Signal PID-reuse window without PID adoption.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		s.processMu.Lock()
+		var status syscall.WaitStatus
+		pid, err := syscall.Wait4(s.pid, &status, syscall.WNOHANG, nil)
+		if err == syscall.EINTR {
+			s.processMu.Unlock()
+			continue
+		}
+		if err != nil || pid != 0 {
+			s.mu.Lock()
+			s.waitUnknown = err != nil
+			s.exited = err == nil && pid == s.pid
+			if s.exited && status.Exited() {
+				s.exitCode = status.ExitStatus()
+			}
+			if s.waitUnknown {
+				s.blocked = true
+			}
+			s.changedLocked()
+			close(s.done)
+			s.mu.Unlock()
+			s.child.Release()
+			s.processMu.Unlock()
+			return
+		}
+		s.processMu.Unlock()
+		<-ticker.C
+	}
+}
+
+func (s *Server) accept() {
+	defer s.wg.Done()
+	for {
+		conn, err := s.listener.AcceptUnix()
+		if err != nil {
+			return
+		}
+		s.mu.Lock()
+		if len(s.conns) >= 8 {
+			s.mu.Unlock()
+			conn.Close()
+			continue
+		}
+		s.conns[conn] = true
+		s.wg.Add(1)
+		s.mu.Unlock()
+		go s.handle(conn)
+	}
+}
+
+func (s *Server) handle(conn *net.UnixConn) {
+	defer s.wg.Done()
+	defer func() {
+		s.mu.Lock()
+		delete(s.conns, conn)
+		if s.owner == conn {
+			s.owner = nil
+		}
+		s.mu.Unlock()
+		conn.Close()
+	}()
+	uid, err := localipc.PeerUID(conn)
+	if err != nil || uid != uint32(os.Getuid()) {
+		return
+	}
+	reader := bufio.NewReaderSize(conn, localipc.MaxFrame)
+	for {
+		s.mu.Lock()
+		owner := s.owner == conn
+		s.mu.Unlock()
+		deadline := time.Now().Add(s.cfg.IOTimeout)
+		if owner {
+			deadline = time.Time{}
+		}
+		conn.SetReadDeadline(deadline)
+		var req Request
+		if err := localipc.Read(reader, &req); err != nil {
+			return
+		}
+		response := s.process(conn, req)
+		conn.SetWriteDeadline(time.Now().Add(s.cfg.IOTimeout))
+		if localipc.Write(conn, response) != nil {
+			return
+		}
+	}
+}
+
+func (s *Server) snapshotLocked(code string) Response {
+	return Response{Code: code, Instance: s.instance, Epoch: s.epoch, PID: s.pid,
+		Exited: s.exited, ExitCode: s.exitCode, Offset: len(s.output), Overflow: s.overflow, Writes: len(s.writes)}
+}
+
+func (s *Server) process(conn *net.UnixConn, req Request) Response {
+	if req.Op == "claim" {
+		// Claim and effects use the same serialization lock. Replacing a
+		// controller cannot overtake an already admitted pipe write or stop.
+		s.writeMu.Lock()
+		defer s.writeMu.Unlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if req.Execution != s.cfg.Execution {
+			return s.snapshotLocked("wrong_execution")
+		}
+		if s.owner != nil || req.Epoch <= s.epoch || req.Sequence != 0 || len(req.Data) != 0 || req.Offset != 0 {
+			return s.snapshotLocked("controller_conflict")
+		}
+		s.owner, s.epoch = conn, req.Epoch
+		return s.snapshotLocked("ok")
+	}
+	s.mu.Lock()
+	if req.Execution != s.cfg.Execution {
+		defer s.mu.Unlock()
+		return s.snapshotLocked("wrong_execution")
+	}
+	if req.Op == "status" {
+		defer s.mu.Unlock()
+		return s.snapshotLocked("ok")
+	}
+	if s.owner != conn || req.Epoch != s.epoch {
+		defer s.mu.Unlock()
+		return s.snapshotLocked("stale_controller")
+	}
+	s.mu.Unlock()
+	switch req.Op {
+	case "write":
+		return s.write(conn, req)
+	case "read":
+		return s.read(req)
+	case "stop":
+		s.writeMu.Lock()
+		defer s.writeMu.Unlock()
+		s.mu.Lock()
+		if s.owner != conn || req.Epoch != s.epoch {
+			response := s.snapshotLocked("stale_controller")
+			s.mu.Unlock()
+			return response
+		}
+		s.blocked = true
+		s.mu.Unlock()
+		return s.stop()
+	case "release":
+		s.writeMu.Lock()
+		defer s.writeMu.Unlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.owner != conn || req.Epoch != s.epoch {
+			return s.snapshotLocked("stale_controller")
+		}
+		s.owner = nil
+		return s.snapshotLocked("released")
+	default:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.snapshotLocked("unsupported_operation")
+	}
+}
+
+func (s *Server) write(conn *net.UnixConn, req Request) Response {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.Lock()
+	if s.owner != conn || req.Epoch != s.epoch {
+		defer s.mu.Unlock()
+		return s.snapshotLocked("stale_controller")
+	}
+	digest := sha256.Sum256(req.Data)
+	if prior, ok := s.writes[req.Sequence]; ok {
+		defer s.mu.Unlock()
+		if prior.digest != digest {
+			return s.snapshotLocked("sequence_conflict")
+		}
+		return s.snapshotLocked(prior.code)
+	}
+	if s.blocked || s.exited || req.Sequence != s.seq+1 || len(req.Data) == 0 || len(req.Data) > 4096 || len(s.writes) >= MaxWrites {
+		defer s.mu.Unlock()
+		return s.snapshotLocked("write_refused")
+	}
+	s.seq = req.Sequence
+	// Reserve the unknown effect before touching stdin.
+	s.writes[req.Sequence] = writeRecord{digest: digest, code: "write_unknown"}
+	s.mu.Unlock()
+	s.stdin.SetWriteDeadline(time.Now().Add(s.cfg.IOTimeout))
+	n, err := s.stdin.Write(req.Data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	code := "written"
+	if err != nil || n != len(req.Data) {
+		code, s.blocked = "write_unknown", true
+	}
+	s.writes[req.Sequence] = writeRecord{digest: digest, code: code}
+	return s.snapshotLocked(code)
+}
+
+func (s *Server) read(req Request) Response {
+	deadline := time.NewTimer(s.cfg.IOTimeout)
+	defer deadline.Stop()
+	for {
+		s.mu.Lock()
+		if req.Offset < 0 || req.Offset > len(s.output) || s.overflow {
+			response := s.snapshotLocked("output_unavailable")
+			s.mu.Unlock()
+			return response
+		}
+		if req.Offset < len(s.output) || s.exited {
+			response := s.snapshotLocked("ok")
+			response.Data = bytes.Clone(s.output[req.Offset:])
+			s.mu.Unlock()
+			return response
+		}
+		changed := s.changed
+		s.mu.Unlock()
+		select {
+		case <-changed:
+		case <-deadline.C:
+			s.mu.Lock()
+			response := s.snapshotLocked("read_timeout")
+			s.mu.Unlock()
+			return response
+		case <-s.closed:
+			return Response{Code: "runner_closed"}
+		}
+	}
+}
+
+func (s *Server) stop() Response {
+	s.stdin.Close()
+	timer := time.NewTimer(s.cfg.IOTimeout)
+	defer timer.Stop()
+	select {
+	case <-s.done:
+	case <-timer.C:
+		s.processMu.Lock()
+		s.mu.Lock()
+		maySignal := !s.exited && !s.waitUnknown
+		s.mu.Unlock()
+		if maySignal {
+			// Only this unreaped child; never a PID reconstructed from state.
+			s.child.Kill()
+		}
+		s.processMu.Unlock()
+		select {
+		case <-s.done:
+		case <-time.After(s.cfg.IOTimeout):
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.snapshotLocked("stop_unknown")
+		}
+	}
+	select {
+	case <-s.outputDone:
+	case <-time.After(s.cfg.IOTimeout):
+		s.stdout.Close()
+		s.mu.Lock()
+		s.blocked, s.overflow = true, true
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.exited || s.waitUnknown {
+		return s.snapshotLocked("stop_unknown")
+	}
+	return s.snapshotLocked("stopped")
+}
+
+func (s *Server) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.closed)
+		s.listener.Close()
+		s.mu.Lock()
+		for conn := range s.conns {
+			conn.Close()
+		}
+		s.mu.Unlock()
+		if result := s.stop(); result.Code != "stopped" {
+			s.stdout.Close()
+			s.closeErr = errors.New("runner_stop_unknown")
+			return
+		}
+		s.wg.Wait()
+	})
+	return s.closeErr
+}
+
+type Client struct {
+	conn   *net.UnixConn
+	reader *bufio.Reader
+	mu     sync.Mutex
+}
+
+func Dial(ctx context.Context, socket string) (*Client, error) {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	if err != nil {
+		return nil, err
+	}
+	unix := conn.(*net.UnixConn)
+	uid, err := localipc.PeerUID(unix)
+	if err != nil || uid != uint32(os.Getuid()) {
+		conn.Close()
+		return nil, errors.New("runner_peer_refused")
+	}
+	return &Client{conn: unix, reader: bufio.NewReaderSize(conn, localipc.MaxFrame)}, nil
+}
+
+func (c *Client) Call(ctx context.Context, req Request) (Response, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return Response{}, errors.New("deadline_required")
+	}
+	if err := ctx.Err(); err != nil {
+		return Response{}, err
+	}
+	stop := context.AfterFunc(ctx, func() { c.conn.Close() })
+	defer stop()
+	c.conn.SetDeadline(deadline)
+	if err := localipc.Write(c.conn, req); err != nil {
+		return Response{}, err
+	}
+	var response Response
+	if err := localipc.Read(c.reader, &response); err != nil {
+		return Response{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) Close() error { return c.conn.Close() }
