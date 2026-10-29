@@ -14,12 +14,12 @@
   user, not agents sharing that user. Admit session/caller-scoped capabilities
   and cross-UID qualification before real deployment. No credential provisioning
   is part of M1.
-- **CI transition:** replace both historical SH1 extraction workflows with
-  separately reviewed, secret-free module CI before publishing this prototype.
+- **CI qualification:** verify the hosted module-wide `go vet` and `go test`
+  results for the exact prototype revision after the separate workflow change.
   No private source checkout is a dependency of the new host.
-- **Repository credential cleanup:** after CI retirement, the repository owner
-  must resolve removal of the unused `SPM_READ_TOKEN` Actions secret. Reading,
-  exporting or deleting its value is not part of product development.
+- **Repository settings:** existing credentials remain under repository-owner
+  custody. Any change requires the owner's separate decision; product
+  development does not read, export or modify their values.
 - **Later features:** optional goals and their namespace/authority, migration,
   detector automation, process-tree confinement, service installation and other
   platform backends remain separate work; none is activated by M1.
