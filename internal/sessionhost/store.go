@@ -72,7 +72,7 @@ func (s *store) read() (State, bool, error) {
 	if err := localipc.Decode(file, &state); err != nil {
 		return State{}, false, errors.New("state_corrupt")
 	}
-	if state.Version != 1 || state.Execution == "" || state.Epoch == 0 || len(state.Records) > MaxRecords ||
+	if state.Version != 1 || !validInputState(state.InputState) || (state.InputState == InputSecurityStop && !state.SecurityStopped) || state.Execution == "" || state.Epoch == 0 || len(state.Records) > MaxRecords ||
 		(state.Fence != "open" && state.Fence != "held" && state.Fence != "unknown") {
 		return State{}, false, errors.New("state_corrupt")
 	}

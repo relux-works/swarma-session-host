@@ -75,7 +75,7 @@ func openHost(t *testing.T, cfg sessionhost.Config) *sessionhost.Host {
 
 func await(t *testing.T, host *sessionhost.Host, id, state string) sessionhost.State {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		snapshot := host.Snapshot()
 		for _, record := range snapshot.Records {

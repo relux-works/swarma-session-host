@@ -69,7 +69,7 @@ def lane(binary_dir, report_dir, protocol):
                                        "-runner", str(runner_socket), "-state", str(state_dir), "-execution", execution,
                                        "-adapter", "json-fixture" if protocol == "json" else "line-fixture",
                                        "-vendor", "unlisted-vendor", "-model", "future-model@7", "-reasoning", "new-effort",
-                                       "-io-timeout", "2s"])
+                                       "-input-state", "idle", "-io-timeout", "2s"])
                 wait_for(lambda: endpoint.exists() and process.poll() is None, "host not ready")
                 return process, endpoint
 

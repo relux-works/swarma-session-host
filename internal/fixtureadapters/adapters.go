@@ -14,7 +14,17 @@ import (
 
 type JSON struct{}
 
-func (JSON) Name() string { return "json-fixture" }
+func (JSON) Name() string                       { return "json-fixture" }
+func (JSON) InputState() sessionhost.InputState { return sessionhost.InputIdle }
+
+// Gated supplies explicit synthetic input evidence without parsing a real harness.
+// An empty or unrecognized state is treated as unknown by the host.
+type Gated struct {
+	sessionhost.Adapter
+	State sessionhost.InputState
+}
+
+func (g Gated) InputState() sessionhost.InputState { return g.State }
 
 type Envelope struct {
 	Kind      string                `json:"kind"`
@@ -44,7 +54,8 @@ func (JSON) Applied(output []byte, n sessionhost.Notice, s sessionhost.Selection
 // Lines uses a distinct wire encoding. Adding it requires no core changes.
 type Lines struct{}
 
-func (Lines) Name() string { return "line-fixture" }
+func (Lines) Name() string                       { return "line-fixture" }
+func (Lines) InputState() sessionhost.InputState { return sessionhost.InputIdle }
 
 func (Lines) Encode(n sessionhost.Notice, s sessionhost.Selection) ([]byte, error) {
 	fields := []string{n.ID, n.Reference, s.Vendor, s.Model, s.Reasoning}

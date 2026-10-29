@@ -13,7 +13,8 @@ board session daemon.
 
 The runnable prototype covers bounded input and output, private Unix sockets,
 controller epochs, durable queued/unknown/applied receipts, exact retry,
-changed-intent conflict, owned-child stop and host replacement. See the
+changed-intent conflict, fixture input eligibility, a latched security stop,
+owned-child stop and host replacement. See the
 [M1 contract and limitations](docs/prototype-m1.md).
 
 The next slices are a real Codex adapter, then a qualified launch through
@@ -38,7 +39,9 @@ python3 .scripts/prototype-smoke.py \
 The smoke starts only its own synthetic processes, records their PIDs, kills
 one owned host per protocol, reconnects a new host to the same runner/child,
 checks retry and stale-epoch rejection, and confirms owned-child exit. Both
-protocol lanes run even if one fails. Reports and bounded fixture logs go under
+protocol lanes run even if one fails. The Go process tests also interrupt the
+host at dispatch and acknowledgement barriers and verify that uncertainty cannot
+replay. Reports and bounded fixture logs go under
 `.temp/prototype/evidence/`; temporary private socket/state directories under
 `/tmp/session-smoke-*` are removed after the run. No credentials, profiles,
 accounts or shared services are accessed.

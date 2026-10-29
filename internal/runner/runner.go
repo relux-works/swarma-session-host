@@ -232,16 +232,32 @@ func (s *Server) accept() {
 		if err != nil {
 			return
 		}
-		s.mu.Lock()
-		if len(s.conns) >= 8 {
-			s.mu.Unlock()
-			conn.Close()
-			continue
+		if s.register(conn) {
+			go s.handle(conn)
 		}
-		s.conns[conn] = true
-		s.wg.Add(1)
-		s.mu.Unlock()
-		go s.handle(conn)
+	}
+}
+
+// register and shutdown enumerate connections under the same lock. The accept
+// goroutine remains counted until every accepted connection is rejected or added.
+func (s *Server) register(conn *net.UnixConn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.isClosedLocked() || len(s.conns) >= 8 {
+		conn.Close()
+		return false
+	}
+	s.conns[conn] = true
+	s.wg.Add(1)
+	return true
+}
+
+func (s *Server) isClosedLocked() bool {
+	select {
+	case <-s.closed:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -295,6 +311,9 @@ func (s *Server) process(conn *net.UnixConn, req Request) Response {
 		defer s.writeMu.Unlock()
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.isClosedLocked() {
+			return s.snapshotLocked("runner_closed")
+		}
 		if req.Execution != s.cfg.Execution {
 			return s.snapshotLocked("wrong_execution")
 		}
@@ -305,6 +324,10 @@ func (s *Server) process(conn *net.UnixConn, req Request) Response {
 		return s.snapshotLocked("ok")
 	}
 	s.mu.Lock()
+	if s.isClosedLocked() {
+		defer s.mu.Unlock()
+		return s.snapshotLocked("runner_closed")
+	}
 	if req.Execution != s.cfg.Execution {
 		defer s.mu.Unlock()
 		return s.snapshotLocked("wrong_execution")
@@ -461,9 +484,9 @@ func (s *Server) stop() Response {
 
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
+		s.mu.Lock()
 		close(s.closed)
 		s.listener.Close()
-		s.mu.Lock()
 		for conn := range s.conns {
 			conn.Close()
 		}

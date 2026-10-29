@@ -1,15 +1,112 @@
 package runner
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/relux-works/swarma-session-host/internal/localipc"
 )
+
+// A real accepted connection paused before registration cannot escape shutdown,
+// even with a claim already queued and its client left open. The live variant
+// claims normally; the closed variant also refuses direct controller admission.
+func TestShutdownRejectsLateRegistration(t *testing.T) {
+	for _, closing := range []bool{false, true} {
+		t.Run(fmt.Sprint(closing), func(t *testing.T) {
+			cfg := testConfig(t, "echo")
+			s, err := Start(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { s.Close() })
+			listener, err := localipc.Listen(filepath.Join(filepath.Dir(cfg.Socket), "late.sock"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			client, err := net.DialUnix("unix", nil, listener.Addr().(*net.UnixAddr))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			accepted, err := listener.AcceptUnix()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer accepted.Close()
+			claim := Request{Op: "claim", Execution: cfg.Execution, Epoch: 1}
+			if err := localipc.Write(client, claim); err != nil {
+				t.Fatal(err)
+			}
+			resume, registered := make(chan struct{}), make(chan bool, 1)
+			// Model the accept loop's existing WaitGroup member while paused
+			// between AcceptUnix and register, before any handler is counted.
+			s.wg.Add(1)
+			defer func() {
+				select {
+				case <-resume:
+				default:
+					close(resume)
+				}
+			}()
+			go func() {
+				defer s.wg.Done()
+				<-resume
+				ok := s.register(accepted)
+				registered <- ok
+				if ok {
+					go s.handle(accepted)
+				}
+			}()
+			closed := make(chan error, 1)
+			if closing {
+				go func() { closed <- s.Close() }()
+				select {
+				case <-s.closed:
+				case <-time.After(time.Second):
+					t.Fatal("shutdown did not start")
+				}
+			}
+			close(resume)
+			select {
+			case ok := <-registered:
+				if ok == closing {
+					t.Fatalf("registration=%v during closed=%v", ok, closing)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("registration did not return")
+			}
+			if !closing {
+				client.SetReadDeadline(time.Now().Add(time.Second))
+				var response Response
+				if err := localipc.Read(bufio.NewReader(client), &response); err != nil || response.Code != "ok" {
+					t.Fatalf("live admission: %+v %v", response, err)
+				}
+				go func() { closed <- s.Close() }()
+			}
+			select {
+			case err := <-closed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("shutdown hung with client open")
+			}
+			if response := s.process(accepted, claim); response.Code != "runner_closed" {
+				t.Fatalf("post-close claim: %+v", response)
+			}
+		})
+	}
+}
 
 func TestFixtureChild(t *testing.T) {
 	switch os.Getenv("SESSION_HOST_FIXTURE") {
