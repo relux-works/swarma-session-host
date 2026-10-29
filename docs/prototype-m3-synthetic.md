@@ -88,6 +88,7 @@ owned unreaped-child signal discipline remains the only stop authority.
 Synthetic tests pair valid delivery with process/lease/identity mismatches,
 revision rollback, observer errors/timeouts, revoked leases after Encode,
 protocol-native identity conflicts and journal corruption. Actual owned-host
+SIGKILL before verification preserves the failed initialization marker;
 SIGKILL at in-flight, acknowledgement and applied boundaries retains the same
 runner/child and uncertainty. Bounded guard-removal controls check that process
 comparison and immediate pre-write lease revalidation detect their violations.

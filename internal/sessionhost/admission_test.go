@@ -203,6 +203,9 @@ func TestAdmissionHostProcess(t *testing.T) {
 	b := proof.Record.Binding
 	phase := os.Getenv("ADMISSION_PHASE")
 	cfg := sessionhost.Config{StateDir: os.Getenv("ADMISSION_STATE"), Socket: b.RunnerSocket, Execution: b.Execution, IOTimeout: time.Second, Adapter: &crashAdapter{Adapter: fixtureadapters.JSON{}, phase: phase}, Selection: sessionhost.Selection{Vendor: b.Vendor, Model: b.Model, Reasoning: b.Effort}, Admission: &admission.Config{Expected: proof, Observe: func(context.Context) (admission.Record, admission.Lease, error) {
+		if phase == "admission" {
+			crashBarrier(phase)
+		}
 		return proof.Record, proof.Lease, nil
 	}, Process: admission.ObserveProcess}}
 	h := openHost(t, cfg)
@@ -217,10 +220,11 @@ func TestAdmissionHostProcess(t *testing.T) {
 	t.Fatal("admitted crash barrier not reached")
 }
 
-// Actual owned-host SIGKILL preserves the verified execution and applied receipt;
-// in-flight/ack crashes retain unknown and cannot replay, even with valid proofs.
+// Actual owned-host SIGKILL preserves a verified execution and applied receipt;
+// in-flight/ack crashes cannot replay. A pre-verification crash retains the
+// unverified marker, refuses recovery, and keeps the same child with zero writes.
 func TestAdmittedHostSIGKILL(t *testing.T) {
-	for _, phase := range []string{"applied", "inflight", "ack"} {
+	for _, phase := range []string{"admission", "applied", "inflight", "ack"} {
 		t.Run(phase, func(t *testing.T) {
 			cfg, _ := setup(t, fixtureadapters.JSON{}, false)
 			cfg, p := admitted(t, cfg)
@@ -285,6 +289,29 @@ func TestAdmittedHostSIGKILL(t *testing.T) {
 			status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
 			if err == nil || !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
 				t.Fatalf("not actual SIGKILL: %v", err)
+			}
+			if phase == "admission" {
+				rejected, err := sessionhost.Open(cfg)
+				if err == nil {
+					rejected.Close()
+					t.Fatal("unverified admission crash recovered")
+				}
+				if err.Error() != "admission_reconciliation_required" {
+					t.Fatal(err)
+				}
+				data, err := os.ReadFile(filepath.Join(cfg.StateDir, "state.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var saved sessionhost.State
+				if json.Unmarshal(data, &saved) != nil || saved.Admission == nil || !saved.Admission.Failed || saved.InputState != sessionhost.InputUnknown || len(saved.Records) != 0 {
+					t.Fatal("unverified admission marker was lost")
+				}
+				after := inspectRunner(t, cfg)
+				if after.Instance != before.Instance || after.PID != before.PID || after.Writes != 0 || after.Exited {
+					t.Fatal("unverified crash changed execution or wrote")
+				}
+				return
 			}
 			h := replacementAfterCrash(t, cfg)
 			s := h.Snapshot()
@@ -412,7 +439,7 @@ func TestAdmissionProtocolGate(t *testing.T) {
 // Corrupt/new-version/lost admission metadata is rejected before controller
 // contact or mutation; restoring the exact bytes supplies the valid control.
 func TestAdmissionJournalRefusal(t *testing.T) {
-	for _, mode := range []string{"version", "missing", "binding", "unknown-field", "permissions"} {
+	for _, mode := range []string{"version", "missing", "binding", "unknown-field", "permissions", "lost-state", "pending"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg, _ := setup(t, fixtureadapters.JSON{}, false)
 			cfg, _ = admitted(t, cfg)
@@ -453,23 +480,40 @@ func TestAdmissionJournalRefusal(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if mode == "lost-state" {
+				if err := os.Remove(file); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "pending" {
+				if err := os.WriteFile(filepath.Join(cfg.StateDir, "state.pending"), []byte("update-in-progress\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			rejected, err := sessionhost.Open(cfg)
 			if err == nil {
 				rejected.Close()
 				t.Fatal("corrupt admission journal opened")
 			}
-			if err.Error() != "state_corrupt" && !(mode == "permissions" && err.Error() == "state_not_private") {
+			if err.Error() != "state_corrupt" && !(mode == "permissions" && err.Error() == "state_not_private") && !(mode == "lost-state" && err.Error() == "state_missing") && !(mode == "pending" && err.Error() == "state_update_unknown") {
 				t.Fatalf("unexpected refusal: %v", err)
 			}
 			after, err := os.ReadFile(file)
-			if err != nil || string(after) != string(changed) {
+			if (mode == "lost-state" && !os.IsNotExist(err)) || (mode != "lost-state" && (err != nil || string(after) != string(changed))) {
 				t.Fatal("refusal changed journal")
 			}
 			if got := inspectRunner(t, cfg); got.Writes != 1 || got.Epoch != originalState.Epoch {
 				t.Fatal("corrupt journal contacted runner")
 			}
-			if err := os.Chmod(file, 0600); err != nil {
-				t.Fatal(err)
+			if mode == "pending" {
+				if err := os.Remove(filepath.Join(cfg.StateDir, "state.pending")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode != "lost-state" {
+				if err := os.Chmod(file, 0600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := os.WriteFile(file, original, 0600); err != nil {
 				t.Fatal(err)

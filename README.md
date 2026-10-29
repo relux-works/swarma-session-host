@@ -75,8 +75,8 @@ acceptance. Outstanding integration and repository-owner actions are in
 [UNRESOLVED_QUESTIONS.md](UNRESOLVED_QUESTIONS.md).
 
 [Module CI](.github/workflows/module.yml) runs Go 1.25.5 module vet and race
-tests on GitHub-hosted macOS, using only this public repository. Both checks
-run even if one fails. Historical extraction workflows are retired.
+tests on GitHub-hosted macOS, using only this public repository. Each check records its start load and starts only below 20; cgo is explicit.
+Both checks are attempted even if one fails or cannot start. Historical extraction workflows are retired.
 
 ## Design history and license
 
