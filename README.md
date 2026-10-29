@@ -43,16 +43,14 @@ Design input: [hosted-launch contract r6 harvest](docs/inputs/hosted-launch-cont
 
 Related modules: [swarma-dispatcher](https://github.com/relux-works/swarma-dispatcher), [swarma-user-manager](https://github.com/relux-works/swarma-user-manager), [swarma-credential-broker](https://github.com/relux-works/swarma-credential-broker), [curator-agent-launcher](https://github.com/relux-works/curator-agent-launcher) (`curator-run`), [agent-session-bridge](https://github.com/relux-works/agent-session-bridge).
 
-The generic SH1 gate tools and invented fixture are documented in
-[`docs/sh1-gate.md`](docs/sh1-gate.md). Public CI exercises the tooling on
-GitHub-hosted macOS and Ubuntu. Lane 1 runs in public module CI with a private,
-pinned board checkout; the owner accepted board code excerpts in public CI logs
-on 2026-10-10. The current public lane 2 prototype builds and vets the consumer
-through a file GOPROXY; the release gate requires the full private board CI
-against an immutable public module tag, without a candidate replacement. Lane 3
-tooling checks are distinct from future extracted-module conformance. The gate
-records failures and never hides skips; see the evidence and declared constraints
-in the gate document. No test or build runs on the development host.
+Module CI runs `go vet -p 1 ./...` and
+`go test -p 1 -race -count=1 -timeout=5m ./...` with Go 1.25.5 on
+GitHub-hosted macOS. Both checks run even if one fails, and either failure
+fails the job. The workflow checks out only this public repository, uses pinned
+public actions, and does not use a private source checkout. Results appear in
+GitHub Actions; local verification prints to stdout. Historical SH1 extraction
+tools and invented fixtures remain documented in [docs/sh1-gate.md](docs/sh1-gate.md);
+their results are separate from module CI and do not qualify a real session host.
 
 Through C1 the board will consume the tagged public serving library while
 retaining the `tb-sessiond` executable and composition root. This module's

@@ -1,0 +1,39 @@
+name: module-ci
+
+'on':
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  module:
+    name: macOS module checks
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOMAXPROCS: '2'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.5'
+          cache: false
+      - name: Vet and test
+        shell: bash
+        run: |
+          # Both checks run even when the first one fails.
+          set +e
+          go vet -p 1 ./...
+          vet_status=$?
+          go test -p 1 -race -count=1 -timeout=5m ./...
+          test_status=$?
+          printf 'go vet exit: %s\ngo test exit: %s\n' "$vet_status" "$test_status"
+          if [ "$vet_status" -ne 0 ] || [ "$test_status" -ne 0 ]; then
+            exit 1
+          fi
