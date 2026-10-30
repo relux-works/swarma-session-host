@@ -318,8 +318,9 @@ func TestIdentifySlotsAndWireLocks(t *testing.T) {
 	results := make(chan error, 2)
 	for i := 0; i < 2; i++ {
 		go func() { _, err := identifyCall(t, s); results <- err }()
-	}
-	for i := 0; i < 2; i++ {
+		// Admit the next snapshot only after the prior one has released its
+		// locks. Both replies remain in flight; allowed snapshot busy is not
+		// a failure of the independent handler-slot bound.
 		awaitIdentifyEvent(t, entered, "IDENTIFY_TWO_SLOTS")
 	}
 	if len(s.identifySlots) != 2 {
