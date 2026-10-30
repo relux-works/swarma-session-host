@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -19,8 +20,9 @@ import (
 
 // Optional qualification uses an explicitly supplied retained pre-identify
 // binary. Ordinary tests require no historical checkout. This test starts only
-// owned synthetic processes; it proves unavailable/no fallback and continued
-// protocol3 control, not any upgrade/restart of a hosted runner.
+// owned synthetic processes and proves unavailable plus continued protocol3
+// control. Optional accept tracing qualifies no extra connection against an
+// explicitly instrumented historical build; it never upgrades a hosted runner.
 func TestIdentifyOldRunnerCompatibility(t *testing.T) {
 	binary := os.Getenv("SESSION_HOST_OLD_RUNNER")
 	if binary == "" {
@@ -33,6 +35,14 @@ func TestIdentifyOldRunnerCompatibility(t *testing.T) {
 	}
 	cmd := exec.Command(binary, "-socket", cfg.Socket, "-execution", cfg.Execution, "-io-timeout", "1s")
 	cmd.Env = []string{}
+	trace := ""
+	if os.Getenv("SESSION_HOST_OLD_RUNNER_COUNT_ACCEPTS") == "1" {
+		trace = filepath.Join(filepath.Dir(cfg.Socket), "accepts.log")
+		if err := os.WriteFile(trace, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		cmd.Env = append(cmd.Env, "SESSION_HOST_OLD_RUNNER_ACCEPT_TRACE="+trace)
+	}
 	cmd.Stdin = bytes.NewReader(plan)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -101,6 +111,28 @@ func TestIdentifyOldRunnerCompatibility(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("IDENTIFY_OLD_READY_TIMEOUT")
 	}
+	countAccepts := func() int {
+		b, err := os.ReadFile(trace)
+		if err != nil || !bytes.Equal(b, bytes.Repeat([]byte("accept\n"), bytes.Count(b, []byte("accept\n")))) {
+			t.Fatalf("IDENTIFY_OLD_COUNTER_SETUP: %q %v", b, err)
+		}
+		return bytes.Count(b, []byte("accept\n"))
+	}
+	if trace != "" {
+		// A real served connection proves the external trace is active before
+		// relying on its absence to reject fallback traffic.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		probe, err := Dial(ctx, cfg.Socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		call(t, probe, Request{Op: "status", Execution: cfg.Execution}, "ok")
+		probe.Close()
+		if n := countAccepts(); n != 1 {
+			t.Fatalf("IDENTIFY_OLD_COUNTER_SETUP: accepts=%d", n)
+		}
+	}
 	ctx, cancel := identifyContext(t)
 	defer cancel()
 	req := identifyRequest{Schema: identifyRequestSchema, Execution: cfg.Execution, ExpectedInstance: identifyTestInstance}
@@ -115,6 +147,13 @@ func TestIdentifyOldRunnerCompatibility(t *testing.T) {
 	}
 	defer c.Close()
 	call(t, c, Request{Op: "claim", Execution: cfg.Execution, Epoch: 1}, "ok")
+	// This served connection fences the single accept loop: all synchronous
+	// connections from the completed identify attempt were accepted before it.
+	if trace != "" {
+		if n := countAccepts(); n != 3 {
+			t.Fatalf("IDENTIFY_OLD_SINGLE_OFFER: accepts=%d want=3 (probe, identify, controller)", n)
+		}
+	}
 	call(t, c, Request{Op: "write", Execution: cfg.Execution, Epoch: 1, Sequence: 1, Data: []byte("old-compatible")}, "written")
 	r := call(t, c, Request{Op: "read", Execution: cfg.Execution, Epoch: 1}, "ok")
 	if string(r.Data) != "old-compatible" {

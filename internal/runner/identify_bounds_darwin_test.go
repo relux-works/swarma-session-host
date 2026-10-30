@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,13 +50,14 @@ func identifyAcceptedFixture(t *testing.T, s *Server, accepted time.Time, peer f
 
 // Late classification cannot reset the accept-based budget. Wrong/unreadable
 // peer UID closes before parsing/disclosure; these are declared seams, not a
-// cross-UID OS test. Live same-UID timely controls appear in the adjacent suite.
+// cross-UID OS test. The timely real same-UID neighbor must still succeed.
 func TestIdentifyAcceptedBoundsAndAuth(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		age  time.Duration
 		peer func(*net.UnixConn) (uint32, error)
 	}{
+		{"valid", 0, localipc.PeerUID},
 		{"late", 2 * time.Second, localipc.PeerUID},
 		{"wrongUID", 0, func(*net.UnixConn) (uint32, error) { return uint32(os.Getuid() + 1), nil }},
 		{"missingUID", 0, func(*net.UnixConn) (uint32, error) { return 0, errors.New("unreadable") }},
@@ -69,6 +71,13 @@ func TestIdentifyAcceptedBoundsAndAuth(t *testing.T) {
 			c := identifyAcceptedFixture(t, s, time.Now().Add(-tc.age), tc.peer)
 			c.Write(identifyRequestFor(s))
 			data, err := bufio.NewReader(c).ReadBytes('\n')
+			if tc.name == "valid" {
+				r, decodeErr := decodeIdentifyResponse(data)
+				if err != nil || decodeErr != nil || r.Result != "verified" {
+					t.Fatalf("IDENTIFY_ACCEPT_AUTH_valid: %+v %v %v", r, err, decodeErr)
+				}
+				return
+			}
 			if err == nil || len(data) != 0 {
 				t.Fatalf("IDENTIFY_ACCEPT_AUTH_%s: %q %v", tc.name, data, err)
 			}
@@ -130,9 +139,10 @@ func TestIdentifyDeadlineAndCancellation(t *testing.T) {
 	}
 }
 
-// Each fake reply uses a real private same-PID socket and exactly one accepted
-// connection. Wrong echoes are conflicts; malformed/old/truncated evidence is
-// unavailable. No fallback offer is made. This qualifies only this client.
+// The auditor accepts every connection and reads every request through the
+// original attempt deadline, including extra frames on the first connection.
+// Wrong echoes are conflicts; malformed/old/truncated evidence is unavailable.
+// Counts prove one identify offer and no legacy fallback for this client only.
 func TestIdentifyClientResponses(t *testing.T) {
 	good := identifySuccessWire()
 	for _, tc := range []struct {
@@ -165,39 +175,97 @@ func TestIdentifyClientResponses(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer l.Close()
 			resourceReceipt(t, "socket", 0, l.Addr().String())
-			done := make(chan error, 1)
-			go func() {
-				c, err := l.AcceptUnix()
-				if err != nil {
-					done <- err
-					return
-				}
-				defer c.Close()
-				c.SetDeadline(time.Now().Add(time.Second))
-				b, err := bufio.NewReader(c).ReadBytes('\n')
-				if err != nil {
-					done <- err
-					return
-				}
-				if _, err = decodeIdentifyRequest(b); err != nil {
-					done <- err
-					return
-				}
-				_, err = c.Write(tc.wire)
-				done <- err
-			}()
 			ctx, cancel := identifyContext(t)
 			defer cancel()
+			deadline, _ := ctx.Deadline()
+			if err := l.SetDeadline(deadline); err != nil {
+				t.Fatal(err)
+			}
+			var mu sync.Mutex
+			var handlers sync.WaitGroup
+			var connections []*net.UnixConn
+			accepted, requests, offers, legacy := 0, 0, 0, 0
+			var auditErr error
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				defer handlers.Wait()
+				for {
+					c, err := l.AcceptUnix()
+					if err != nil {
+						if !errors.Is(err, os.ErrDeadlineExceeded) && !errors.Is(err, net.ErrClosed) {
+							mu.Lock()
+							auditErr = err
+							mu.Unlock()
+						}
+						return
+					}
+					mu.Lock()
+					accepted++
+					connections = append(connections, c)
+					mu.Unlock()
+					handlers.Add(1)
+					go func() {
+						defer handlers.Done()
+						defer c.Close()
+						c.SetDeadline(deadline)
+						reader := bufio.NewReaderSize(c, localipc.MaxFrame)
+						for {
+							b, readErr := reader.ReadSlice('\n')
+							if len(b) != 0 {
+								_, decodeErr := decodeIdentifyRequest(b)
+								mu.Lock()
+								requests++
+								if decodeErr == nil {
+									offers++
+								} else {
+									legacy++
+								}
+								mu.Unlock()
+								if decodeErr == nil {
+									c.Write(tc.wire)
+									// EOF must remain observable for truncated frames;
+									// keep reading to count pipelined fallback traffic.
+									c.CloseWrite()
+								} else {
+									localipc.Write(c, Response{Code: "ok"})
+								}
+							}
+							if readErr != nil {
+								if !errors.Is(readErr, io.EOF) && !errors.Is(readErr, os.ErrDeadlineExceeded) && !errors.Is(readErr, net.ErrClosed) {
+									mu.Lock()
+									auditErr = readErr
+									mu.Unlock()
+								}
+								return
+							}
+						}
+					}()
+				}
+			}()
+			t.Cleanup(func() {
+				l.Close()
+				mu.Lock()
+				for _, c := range connections {
+					c.Close()
+				}
+				mu.Unlock()
+				<-done
+			})
 			_, err = identifyForQualification(ctx, l.Addr().String(), os.Getpid(), uint32(os.Getuid()), identifyRequest{Schema: identifyRequestSchema, Execution: "exec-a", ExpectedInstance: identifyTestInstance})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("IDENTIFY_CLIENT_%s: %v", tc.name, err)
 			}
 			select {
-			case err := <-done:
-				if err != nil && !errors.Is(err, io.EOF) {
-					t.Fatal(err)
+			case <-done:
+				mu.Lock()
+				defer mu.Unlock()
+				if auditErr != nil {
+					t.Fatal(auditErr)
+				}
+				if accepted != 1 || requests != 1 || offers != 1 || legacy != 0 {
+					t.Fatalf("IDENTIFY_CLIENT_SINGLE_OFFER: accepted=%d requests=%d identify=%d legacy=%d", accepted, requests, offers, legacy)
 				}
 			case <-time.After(2 * time.Second):
 				t.Fatal("IDENTIFY_CLIENT_SINGLE_OFFER")
