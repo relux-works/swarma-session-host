@@ -3,7 +3,6 @@ package codexadapter
 import (
 	"bytes"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	ap "github.com/relux-works/swarma-session-host/internal/adapterprotocol"
@@ -12,72 +11,14 @@ import (
 
 const offlineSentinel = "fabricated-offline-output-only-canary"
 
-// Metadata validation has its own closed field catalogue, independent of the
-// serializer/restore validators. Incoming payload is not a permitted identity.
+// Metadata membership and values come from the fixture contract; the checker
+// does not call production checkpoint validators to obtain its expected verdict.
 func offlineMetadata(t *testing.T, saved []byte) {
 	t.Helper()
-	if bytes.Contains(saved, []byte(offlineSentinel)) {
-		t.Fatal("OFFLINE_METADATA_ONLY: incoming output persisted")
-	}
-	var outer map[string]json.RawMessage
-	if err := json.Unmarshal(saved, &outer); err != nil {
-		t.Fatal("OFFLINE_METADATA_ONLY: invalid JSON")
-	}
-	check := func(m map[string]json.RawMessage, keys ...string) {
-		t.Helper()
-		if len(m) != len(keys) {
-			t.Fatal("OFFLINE_METADATA_ONLY: unexpected fields")
-		}
-		for _, k := range keys {
-			if _, ok := m[k]; !ok {
-				t.Fatal("OFFLINE_METADATA_ONLY: missing metadata", k)
-			}
-		}
-	}
-	check(outer, "version", "stream", "input_id", "accepted", "completed", "begun")
-	var stream, protocol, view map[string]json.RawMessage
-	if json.Unmarshal(outer["stream"], &stream) != nil {
-		t.Fatal("OFFLINE_METADATA_ONLY")
-	}
-	check(stream, "version", "protocol", "offset", "closed")
-	if json.Unmarshal(stream["protocol"], &protocol) != nil {
-		t.Fatal("OFFLINE_METADATA_ONLY")
-	}
-	check(protocol, "plan_digest", "phase", "view", "request", "pending", "operation")
-	if json.Unmarshal(protocol["view"], &view) != nil {
-		t.Fatal("OFFLINE_METADATA_ONLY")
-	}
-	check(view, "State", "Thread", "Turn", "CompletedTurn", "AuthorityRequired")
-	var scan func(any)
-	scan = func(v any) {
-		switch x := v.(type) {
-		case string:
-			if strings.Contains(x, offlineSentinel) {
-				t.Fatal("OFFLINE_METADATA_ONLY: decoded output persisted")
-			}
-		case map[string]any:
-			for _, v := range x {
-				scan(v)
-			}
-		case []any:
-			for _, v := range x {
-				scan(v)
-			}
-		}
-	}
-	var decoded any
-	if json.Unmarshal(saved, &decoded) != nil {
-		t.Fatal("OFFLINE_METADATA_ONLY")
-	}
-	scan(decoded)
-	for _, k := range []string{"Thread", "Turn", "CompletedTurn"} {
-		var value string
-		if json.Unmarshal(view[k], &value) != nil {
-			t.Fatal("OFFLINE_METADATA_ONLY")
-		}
-		if value != "" && value != "thread-a" && value != "turn-a" {
-			t.Fatal("OFFLINE_METADATA_ONLY: unexpected identity")
-		}
+	cfg := driverConfig()
+	values := adaptercorpus.MetadataValues{Model: cfg.Selection.Model, Provider: cfg.Selection.Provider, Effort: cfg.Selection.Effort, Workspace: cfg.Workspace, Thread: "thread-a", Turns: []string{"turn-a"}, Inputs: []string{"offline-next"}}
+	if err := adaptercorpus.CheckpointMetadata(saved, values, 0); err != nil {
+		t.Fatal(err)
 	}
 }
 

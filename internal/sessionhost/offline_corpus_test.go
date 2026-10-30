@@ -152,12 +152,14 @@ func TestOfflineRPCChild(t *testing.T) {
 
 type offlineDriver struct {
 	ap.Driver
-	c          adaptercorpus.Case
-	crash      bool
-	active     bool
-	mu         sync.Mutex
-	observed   bool
-	observeErr string
+	c            adaptercorpus.Case
+	crash        bool
+	active       bool
+	mu           sync.Mutex
+	observed     bool
+	observeErr   string
+	cycles       uint64
+	cycleChanged chan struct{}
 }
 
 func (d *offlineDriver) Prepare(in ap.Input) (ap.Transition, error) {
@@ -168,6 +170,7 @@ func (d *offlineDriver) Prepare(in ap.Input) (ap.Transition, error) {
 	return x, err
 }
 func (d *offlineDriver) Observe(chunk ap.Chunk) (ap.Transition, error) {
+	defer d.finishCycle()
 	if !d.active || len(chunk.Bytes) == 0 {
 		return d.Driver.Observe(chunk)
 	}
@@ -209,6 +212,41 @@ func (d *offlineDriver) Observe(chunk ap.Chunk) (ap.Transition, error) {
 	result.Actions, result.Facts = actions, facts
 	return result, nil
 }
+
+// A single dispatcher calls Observe once per successful poll. Two completions
+// after enqueue prove the first poll's later dispatch decision finished while
+// this host remained live. This synchronizes on actual work, never a sleep.
+func (d *offlineDriver) finishCycle() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.cycles++
+	if d.cycleChanged != nil {
+		close(d.cycleChanged)
+		d.cycleChanged = make(chan struct{})
+	}
+}
+func (d *offlineDriver) awaitSuccessorCycle(t *testing.T) uint64 {
+	t.Helper()
+	d.mu.Lock()
+	start := d.cycles
+	d.mu.Unlock()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		d.mu.Lock()
+		finished, changed := d.cycles-start, d.cycleChanged
+		d.mu.Unlock()
+		if finished >= 2 {
+			return finished
+		}
+		select {
+		case <-changed:
+		case <-timer.C:
+			t.Fatal("OFFLINE_INPUT_FENCE: successor worker cycle not reached")
+		}
+	}
+}
+
 func (d *offlineDriver) observation() (bool, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -458,33 +496,12 @@ func offlineDisk(t *testing.T, dir string) (sessionhost.State, []byte) {
 	}
 	return s, b
 }
-func offlineDiskMetadata(t *testing.T, b []byte) {
+func offlineDiskMetadata(t *testing.T, b []byte, dir, instance string, corruption int) {
 	t.Helper()
-	if bytes.Contains(b, []byte(offlineOutputSentinel)) {
-		t.Fatal("OFFLINE_METADATA_ONLY: output on disk")
+	values := adaptercorpus.MetadataValues{Model: "offline-model", Provider: "offline-provider", Effort: "offline-effort", Workspace: dir, Thread: "offline-thread", RunnerInstance: instance, Turns: []string{"turn-3", "turn-4"}, Inputs: []string{"one", "two"}}
+	if err := adaptercorpus.JournalMetadata(b, values, corruption); err != nil {
+		t.Fatal(err)
 	}
-	var value any
-	if json.Unmarshal(b, &value) != nil {
-		t.Fatal("OFFLINE_METADATA_ONLY: invalid journal")
-	}
-	var scan func(any)
-	scan = func(v any) {
-		switch x := v.(type) {
-		case string:
-			if strings.Contains(x, offlineOutputSentinel) {
-				t.Fatal("OFFLINE_METADATA_ONLY: escaped output on disk")
-			}
-		case map[string]any:
-			for _, v := range x {
-				scan(v)
-			}
-		case []any:
-			for _, v := range x {
-				scan(v)
-			}
-		}
-	}
-	scan(value)
 }
 
 // The 71 host rows exercise real recovery frontiers and selected factor pairs.
@@ -512,6 +529,8 @@ func TestOfflineHostCorpus(t *testing.T) {
 				RestoredTargetInputs  int
 				SavedSHA256           string
 				SuppliedSHA256        string
+				SuccessorWindow       string
+				SuccessorCycles       uint64
 				Trace                 []offlineRequestTrace
 			}{Case: tc, Status: status}
 			defer func() {
@@ -694,7 +713,7 @@ func TestOfflineHostCorpus(t *testing.T) {
 			before, raw := offlineDisk(t, dir)
 			savedSum := sha256.Sum256(raw)
 			receipt.SavedSHA256 = hex.EncodeToString(savedSum[:])
-			offlineDiskMetadata(t, raw)
+			offlineDiskMetadata(t, raw, dir, original.Instance, 0)
 			before.Protocol.Checkpoint, err = adaptercorpus.Corrupt(before.Protocol.Checkpoint, tc.K)
 			if err != nil {
 				t.Fatal(err)
@@ -718,7 +737,7 @@ func TestOfflineHostCorpus(t *testing.T) {
 				if err != nil {
 					return nil, 0, err
 				}
-				wrapped = &offlineDriver{Driver: d, c: tc, active: true}
+				wrapped = &offlineDriver{Driver: d, c: tc, active: true, cycleChanged: make(chan struct{})}
 				return wrapped, offset, nil
 			}
 			next, err := sessionhost.Open(cfg)
@@ -728,6 +747,7 @@ func TestOfflineHostCorpus(t *testing.T) {
 					t.Fatalf("OFFLINE_CHECKPOINT_REFUSAL: %v", err)
 				}
 				_, after := offlineDisk(t, dir)
+				offlineDiskMetadata(t, after, dir, original.Instance, tc.K)
 				if !bytes.Equal(raw, after) || proxy.recoveryRequests() != 0 {
 					t.Fatal("OFFLINE_CHECKPOINT_NO_EFFECT: rejected restore changed disk/contacted runner")
 				}
@@ -840,7 +860,7 @@ func TestOfflineHostCorpus(t *testing.T) {
 				t.Fatalf("OFFLINE_NO_REPLAY: original runner/child/effects changed: %+v", st)
 			}
 			_, raw = offlineDisk(t, dir)
-			offlineDiskMetadata(t, raw)
+			offlineDiskMetadata(t, raw, dir, original.Instance, 0)
 			originalNotice := next.Snapshot().Records[0]
 			same, err := next.Enqueue(sessionhost.Notice{ID: "one", Reference: "synthetic/one"})
 			if err != nil || same.Notice != originalNotice.Notice || same.Sequence != originalNotice.Sequence {
@@ -861,7 +881,19 @@ func TestOfflineHostCorpus(t *testing.T) {
 				if _, err := next.Enqueue(sessionhost.Notice{ID: "two", Reference: "synthetic/two"}); err != nil {
 					t.Fatal(err)
 				}
-				next.Close() // drain every dispatch opportunity before final counters
+				if tc.O == 0 && tc.V == 0 && tc.E == 0 {
+					receipt.SuccessorCycles = wrapped.awaitSuccessorCycle(t)
+					receipt.SuccessorWindow = "actual worker cycle completed under unknown fence"
+				} else {
+					// A preceding protocol failure dominates dispatch here; do not
+					// pretend that its later queue decision was exercised.
+					receipt.SuccessorWindow = "dominated by preceding protocol refusal"
+				}
+				afterCycle := next.Snapshot()
+				if len(afterCycle.Records) != 2 || afterCycle.Records[1].State != "queued" || afterCycle.Fence != "unknown" {
+					t.Fatal("OFFLINE_INPUT_FENCE: successor crossed the unknown delivery fence")
+				}
+				next.Close()
 				if proxy.recoveryWrites() != 0 || offlineTurns(t, dir) != wantTurns || inspectRunner(t, direct).Writes != wantWrites {
 					t.Fatal("OFFLINE_INPUT_FENCE: queued successor wrote")
 				}
@@ -885,7 +917,7 @@ func TestOfflineHostCorpus(t *testing.T) {
 				}
 			}
 			_, raw = offlineDisk(t, dir)
-			offlineDiskMetadata(t, raw)
+			offlineDiskMetadata(t, raw, dir, original.Instance, 0)
 		})
 	}
 }
