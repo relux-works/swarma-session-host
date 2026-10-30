@@ -25,8 +25,12 @@ The runner captures its original child's exact kernel birth before starting its
 reaper on Darwin with cgo. Failed capture is retained without retry or another
 spawn, and does not disable legacy controller operations. Explicit owned,
 reaped and wait-unknown states keep inconsistent wait results from retaining
-owned-child authority. This internal lifecycle data adds no identify RPC or
-hosted-admission capability.
+owned-child authority. A separate read-only [identify exchange](docs/runner-identify.md)
+offers that original ownership snapshot on Darwin with cgo, using strict
+one-shot frames, same-socket peer PID/UID checks and bounded try-locks.
+Its unexported qualification client has no command caller. External verifier
+integration and hosted-admission qualification remain pending; ownership does
+not establish current liveness.
 
 The next slices qualify hosted launch through Curator and the launcher, followed
 by Claude Code, Muse and Linux. Hosted launch integration needs
@@ -74,6 +78,7 @@ accounts or shared services are accessed.
 | Curator | `curator run codex_cli --native --profile PROFILE --model MODEL --effort EFFORT --permissions native -- app-server --listen stdio://` for an admitted disposable protocol test | Profile-managed environment and credential custody; no credential values or native transcripts in host artifacts |
 | macOS process identity | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -run TestOwnedKernelIdentity ./internal/admission` | Test output; reads only the owned test process in this check; no persisted native process inventory |
 | macOS child birth | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -run 'TestOriginal|TestChildWait|TestChildReap|TestChildClosed' ./internal/runner` | Owned-child lifecycle and kernel controls on stdout; no native session |
+| Runner identify qualification | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -p 1 -run 'TestIdentify|TestPeerIdentity' ./internal/runner ./internal/localipc` | Strict wire, owned sockets, lifecycle/non-effect and post-reply ordering fixtures on stdout; external readers remain unqualified |
 | macOS ps | `/bin/ps -p PID -o stat=` in `TestOwnedKernelChildLifecycle` | Non-reaping state observation of the explicitly owned child; no process discovery |
 | Git | `git rev-parse HEAD`; `git log --show-signature -1` | Revision and signature evidence on stdout |
 | Historical SH1 tools | See [archived extraction tooling](docs/sh1-gate.md) | Historical fixture/gate reports; not a prototype dependency or acceptance proof |

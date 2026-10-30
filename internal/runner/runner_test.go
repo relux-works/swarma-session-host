@@ -64,7 +64,7 @@ func TestShutdownRejectsLateRegistration(t *testing.T) {
 				ok := s.register(accepted)
 				registered <- ok
 				if ok {
-					go s.handle(accepted)
+					go s.handle(accepted, time.Now())
 				}
 			}()
 			closed := make(chan error, 1)

@@ -109,6 +109,9 @@ type Server struct {
 	exited      bool
 	waitUnknown bool
 	exitCode    int
+
+	identifySlots       chan struct{}
+	identifyBeforeReply func() // guarded by mu; qualification barrier, nil in production
 }
 
 func (s *Server) ChildPID() int { return s.pid }
@@ -124,6 +127,12 @@ func startWithBirthCapture(cfg Config, capture func(int) (childBirth, error)) (*
 }
 
 func startWithChildLifecycle(cfg Config, capture func(int) (childBirth, error), wait childWaiter) (*Server, error) {
+	return startWithReaperGate(cfg, capture, wait, nil)
+}
+
+// A qualification-only gate runs before the first lifecycle lock acquisition;
+// ordinary start always passes nil and ownership/reap semantics stay unchanged.
+func startWithReaperGate(cfg Config, capture func(int) (childBirth, error), wait childWaiter, beforeReap func()) (*Server, error) {
 	if cfg.Execution == "" || len(cfg.Execution) > 128 || cfg.IOTimeout <= 0 || cfg.IOTimeout > time.Minute ||
 		!filepath.IsAbs(cfg.Plan.Binary) || !filepath.IsAbs(cfg.Plan.Cwd) || cfg.Plan.Env == nil || len(cfg.Plan.Args) > 32 {
 		return nil, errors.New("invalid_runner_plan")
@@ -169,11 +178,16 @@ func startWithChildLifecycle(cfg Config, capture func(int) (childBirth, error), 
 	}
 	original := captureOriginalChild(process.Pid, capture)
 	s := &Server{cfg: cfg, listener: listener, child: process, pid: process.Pid, original: original, childState: childOwned, stdin: stdin, stdout: stdout,
-		instance: instance, done: make(chan struct{}), outputDone: make(chan struct{}), closed: make(chan struct{}),
+		instance: instance, identifySlots: make(chan struct{}, 2), done: make(chan struct{}), outputDone: make(chan struct{}), closed: make(chan struct{}),
 		conns: make(map[*net.UnixConn]bool), writes: make(map[uint64]writeRecord), changed: make(chan struct{}), exitCode: -1}
 	s.wg.Add(3)
 	go s.collect(stdout)
-	go s.reap(wait)
+	go func() {
+		if beforeReap != nil {
+			beforeReap()
+		}
+		s.reap(wait)
+	}()
 	go s.accept()
 	return s, nil
 }
@@ -269,8 +283,9 @@ func (s *Server) accept() {
 		if err != nil {
 			return
 		}
+		accepted := time.Now()
 		if s.register(conn) {
-			go s.handle(conn)
+			go s.handle(conn, accepted)
 		}
 	}
 }
@@ -298,7 +313,12 @@ func (s *Server) isClosedLocked() bool {
 	}
 }
 
-func (s *Server) handle(conn *net.UnixConn) {
+func (s *Server) handle(conn *net.UnixConn, accepted time.Time) {
+	s.handleWithPeerUID(conn, accepted, localipc.PeerUID)
+}
+
+// Per-connection credential seam is used only by qualification fixtures.
+func (s *Server) handleWithPeerUID(conn *net.UnixConn, accepted time.Time, peerUID func(*net.UnixConn) (uint32, error)) {
 	defer s.wg.Done()
 	defer func() {
 		s.mu.Lock()
@@ -309,22 +329,38 @@ func (s *Server) handle(conn *net.UnixConn) {
 		s.mu.Unlock()
 		conn.Close()
 	}()
-	uid, err := localipc.PeerUID(conn)
+	uid, err := peerUID(conn)
 	if err != nil || uid != uint32(os.Getuid()) {
 		return
 	}
 	reader := bufio.NewReaderSize(conn, localipc.MaxFrame)
+	first := true
 	for {
-		s.mu.Lock()
-		owner := s.owner == conn
-		s.mu.Unlock()
+		owner := false
+		if !first {
+			s.mu.Lock()
+			owner = s.owner == conn
+			s.mu.Unlock()
+		}
 		deadline := time.Now().Add(s.cfg.IOTimeout)
 		if owner {
 			deadline = time.Time{}
 		}
 		conn.SetReadDeadline(deadline)
+		frame, err := reader.ReadSlice('\n')
+		if err != nil {
+			return
+		}
+		if first && !bytes.HasPrefix(bytes.TrimSpace(frame), []byte("{")) {
+			return
+		}
+		if first && offersIdentify(frame) {
+			s.handleIdentify(conn, frame, accepted)
+			return
+		}
+		first = false
 		var req Request
-		if err := localipc.Read(reader, &req); err != nil {
+		if localipc.Decode(bytes.NewReader(frame), &req) != nil {
 			return
 		}
 		response := s.process(conn, req)
