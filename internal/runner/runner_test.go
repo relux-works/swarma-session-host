@@ -23,7 +23,7 @@ func TestShutdownRejectsLateRegistration(t *testing.T) {
 	for _, closing := range []bool{false, true} {
 		t.Run(fmt.Sprint(closing), func(t *testing.T) {
 			cfg := testConfig(t, "echo")
-			s, err := Start(cfg)
+			s, err := startTestRunner(t, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -110,6 +110,8 @@ func TestShutdownRejectsLateRegistration(t *testing.T) {
 
 func TestFixtureChild(t *testing.T) {
 	switch os.Getenv("SESSION_HOST_FIXTURE") {
+	case "exit":
+		os.Exit(0)
 	case "echo":
 		io.Copy(os.Stdout, os.Stdin)
 		os.Exit(0)
@@ -186,13 +188,13 @@ func TestFixtureChild(t *testing.T) {
 func TestForcedStopAndReapedHandle(t *testing.T) {
 	cfg := testConfig(t, "ignore-eof")
 	cfg.IOTimeout = 100 * time.Millisecond
-	server, err := Start(cfg)
+	server, err := startTestRunner(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { server.Close() })
 	otherCfg := testConfig(t, "echo")
-	other, err := Start(otherCfg)
+	other, err := startTestRunner(t, otherCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +223,15 @@ func testConfig(t *testing.T, fixture string) Config {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
+		}
+		if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+			t.Errorf("OWNED_TEMPDIR_LEFTOVER: %s %v", dir, err)
+		}
+	})
+	resourceReceipt(t, "tempdir", 0, dir)
 	return Config{Socket: filepath.Join(dir, "r.sock"), Execution: "fixture-execution", IOTimeout: time.Second,
 		Plan: Plan{Binary: binary, Args: []string{"-test.run=^TestFixtureChild$"}, Cwd: dir,
 			Env: []string{"SESSION_HOST_FIXTURE=" + fixture, "GORACE=atexit_sleep_ms=0"}}}
@@ -257,7 +267,7 @@ func call(t *testing.T, client *Client, req Request, code string) Response {
 // requests and changed-data retries do not add bytes to this child's output.
 func TestControllerFenceAndDeduplication(t *testing.T) {
 	cfg := testConfig(t, "echo")
-	server, err := Start(cfg)
+	server, err := startTestRunner(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +299,7 @@ func TestControllerFenceAndDeduplication(t *testing.T) {
 // controller claims it without spawning a replacement and old epochs refuse.
 func TestControllerReplacementPreservesChild(t *testing.T) {
 	cfg := testConfig(t, "echo")
-	server, err := Start(cfg)
+	server, err := startTestRunner(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +337,7 @@ func TestControllerReplacementPreservesChild(t *testing.T) {
 // retained output stays bounded and status/owned stop remain reachable.
 func TestOutputPressurePreservesControl(t *testing.T) {
 	cfg := testConfig(t, "flood")
-	server, err := Start(cfg)
+	server, err := startTestRunner(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,15 +373,15 @@ func TestStartRefusalsPreserveOriginal(t *testing.T) {
 	cfg := testConfig(t, "echo")
 	bad := cfg
 	bad.Plan.Binary = "relative-binary"
-	if server, err := Start(bad); err == nil || server != nil {
+	if server, err := startTestRunner(t, bad); err == nil || server != nil {
 		t.Fatal("relative binary accepted")
 	}
-	server, err := Start(cfg)
+	server, err := startTestRunner(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { server.Close() })
-	if duplicate, err := Start(cfg); err == nil || duplicate != nil {
+	if duplicate, err := startTestRunner(t, cfg); err == nil || duplicate != nil {
 		t.Fatal("occupied socket accepted")
 	}
 	client := testClient(t, cfg)
@@ -395,7 +405,7 @@ func TestOutputEndClosesWritesBeforeProcessExit(t *testing.T) {
 				mode = "eof-live"
 			}
 			cfg := testConfig(t, mode)
-			s, err := Start(cfg)
+			s, err := startTestRunner(t, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}

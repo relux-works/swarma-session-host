@@ -83,6 +83,8 @@ type Server struct {
 	child       *os.Process
 	processMu   sync.Mutex
 	pid         int
+	original    originalChild
+	childState  childOwnership
 	stdin       childInput
 	stdout      io.ReadCloser
 	instance    string
@@ -112,6 +114,16 @@ type Server struct {
 func (s *Server) ChildPID() int { return s.pid }
 
 func Start(cfg Config) (*Server, error) {
+	return startWithBirthCapture(cfg, captureChildBirth)
+}
+
+// The capture argument is per-instance so failure fixtures never alter global
+// syscalls. The public path always uses the platform kernel capture.
+func startWithBirthCapture(cfg Config, capture func(int) (childBirth, error)) (*Server, error) {
+	return startWithChildLifecycle(cfg, capture, waitOriginalChild)
+}
+
+func startWithChildLifecycle(cfg Config, capture func(int) (childBirth, error), wait childWaiter) (*Server, error) {
 	if cfg.Execution == "" || len(cfg.Execution) > 128 || cfg.IOTimeout <= 0 || cfg.IOTimeout > time.Minute ||
 		!filepath.IsAbs(cfg.Plan.Binary) || !filepath.IsAbs(cfg.Plan.Cwd) || cfg.Plan.Env == nil || len(cfg.Plan.Args) > 32 {
 		return nil, errors.New("invalid_runner_plan")
@@ -155,12 +167,13 @@ func Start(cfg Config) (*Server, error) {
 		listener.Close()
 		return nil, errors.New("child_start_failed")
 	}
-	s := &Server{cfg: cfg, listener: listener, child: process, pid: process.Pid, stdin: stdin, stdout: stdout,
+	original := captureOriginalChild(process.Pid, capture)
+	s := &Server{cfg: cfg, listener: listener, child: process, pid: process.Pid, original: original, childState: childOwned, stdin: stdin, stdout: stdout,
 		instance: instance, done: make(chan struct{}), outputDone: make(chan struct{}), closed: make(chan struct{}),
 		conns: make(map[*net.UnixConn]bool), writes: make(map[uint64]writeRecord), changed: make(chan struct{}), exitCode: -1}
 	s.wg.Add(3)
 	go s.collect(stdout)
-	go s.reap()
+	go s.reap(wait)
 	go s.accept()
 	return s, nil
 }
@@ -212,7 +225,7 @@ func (s *Server) collect(stdout io.ReadCloser) {
 	stdout.Close()
 }
 
-func (s *Server) reap() {
+func (s *Server) reap(wait childWaiter) {
 	defer s.wg.Done()
 	// Nonblocking wait and signal share processMu. Until this code reaps the
 	// child its PID remains allocated, even after exit. This avoids Darwin's
@@ -221,26 +234,26 @@ func (s *Server) reap() {
 	defer ticker.Stop()
 	for {
 		s.processMu.Lock()
+		s.mu.Lock()
+		owns := s.ownsChildLocked()
+		s.mu.Unlock()
 		var status syscall.WaitStatus
-		pid, err := syscall.Wait4(s.pid, &status, syscall.WNOHANG, nil)
+		pid, err := -1, error(syscall.ECHILD)
+		if owns {
+			pid, err = wait(s, &status)
+		}
 		if err == syscall.EINTR {
 			s.processMu.Unlock()
 			continue
 		}
-		if err != nil || pid != 0 {
+		state, terminal := classifyChildWait(s.pid, pid, err)
+		if terminal {
 			s.mu.Lock()
-			s.waitUnknown = err != nil
-			s.exited = err == nil && pid == s.pid
-			if s.exited && status.Exited() {
-				s.exitCode = status.ExitStatus()
-			}
-			if s.waitUnknown {
-				s.blocked = true
-			}
-			s.changedLocked()
-			close(s.done)
+			s.publishChildWaitLocked(state, status)
 			s.mu.Unlock()
-			s.child.Release()
+			if s.child != nil {
+				s.child.Release()
+			}
 			s.processMu.Unlock()
 			return
 		}
@@ -499,7 +512,7 @@ func (s *Server) stop() Response {
 	case <-timer.C:
 		s.processMu.Lock()
 		s.mu.Lock()
-		maySignal := !s.exited && !s.waitUnknown
+		maySignal := s.ownsChildLocked() && !s.exited && !s.waitUnknown
 		s.mu.Unlock()
 		if maySignal {
 			// Only this unreaped child; never a PID reconstructed from state.

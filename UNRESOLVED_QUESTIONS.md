@@ -11,6 +11,10 @@
   Curator lease API release and a production observer accepting bind. The M1
   public runner instance identifier is not that proof. Exact-plan compatibility
   and successful real lease binding remain unimplemented.
+- **Runner ownership exchange:** original birth capture and explicit wait states
+  are internal lifecycle foundations only. The read-only identify wire, socket
+  peer-PID binding and independent record-bound verifier acceptance remain
+  unimplemented. Legacy status is not ownership proof.
 - **Remaining harness qualification:** Codex 0.164.0 synthetic no-tool turns and
   retained-session host replacement pass the disposable native protocol slice.
   Claude headless stream-json and Muse MSP still need native qualification;

@@ -15,7 +15,7 @@ func receiptRequest(cfg Config, data []byte) Request {
 // sequence or write bytes. The nearby valid write remains deliverable once.
 func TestWriteReceiptHasNoWriteEffects(t *testing.T) {
 	cfg := testConfig(t, "echo")
-	server, err := Start(cfg)
+	server, err := startTestRunner(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestWriteReceiptHasNoWriteEffects(t *testing.T) {
 // effect written, missing or replayable, and a changed digest still conflicts.
 func TestWriteReceiptPreservesUnknown(t *testing.T) {
 	cfg := testConfig(t, "echo")
-	server, err := Start(cfg)
+	server, err := startTestRunner(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

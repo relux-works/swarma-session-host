@@ -55,7 +55,7 @@ func TestOutputEndCancelsReservedWrite(t *testing.T) {
 			cfg := testConfig(t, "gated-output-end")
 			cfg.IOTimeout = 2 * time.Second
 			dir := cfg.Plan.Cwd
-			s, err := Start(cfg)
+			s, err := startTestRunner(t, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -159,7 +159,7 @@ func TestOutputEndCancelsBackpressuredWrite(t *testing.T) {
 			cfg := testConfig(t, "gated-output-end")
 			cfg.IOTimeout = 2 * time.Second
 			dir := cfg.Plan.Cwd
-			s, err := Start(cfg)
+			s, err := startTestRunner(t, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
