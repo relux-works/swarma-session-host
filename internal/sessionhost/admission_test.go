@@ -4,6 +4,7 @@ package sessionhost_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -81,83 +82,185 @@ func awaitAdmissionFailure(t *testing.T, h *sessionhost.Host) {
 	t.Fatal("admission loss did not durably fence delivery")
 }
 
-// Kernel-backed valid admission writes once. Each unavailable or conflicting
-// provider thereafter fences before the second effect, survives disk readback,
-// refuses release/downgrade/recovery, and leaves owned stop usable.
+// admissionWindowAdapter has per-test barriers only. Applied holds the first
+// real acknowledgement before dispatch can begin the next intent. Encode holds
+// the second intent's dispatch preparation, after its durable unknown marker;
+// Enqueue's separate validation call is counted and never blocked.
+type admissionWindowAdapter struct {
+	sessionhost.Adapter
+	window        string
+	entered       chan struct{}
+	release       chan struct{}
+	releaseOnce   sync.Once
+	mu            sync.Mutex
+	secondEncodes int
+}
+
+func (a *admissionWindowAdapter) unblock() { a.releaseOnce.Do(func() { close(a.release) }) }
+func (a *admissionWindowAdapter) Encode(n sessionhost.Notice, s sessionhost.Selection) ([]byte, error) {
+	b, err := a.Adapter.Encode(n, s)
+	if n.ID == "two" && a.window == "after-prepare" && err == nil {
+		a.mu.Lock()
+		a.secondEncodes++
+		call := a.secondEncodes
+		a.mu.Unlock()
+		if call == 2 {
+			close(a.entered)
+			<-a.release
+		}
+	}
+	return b, err
+}
+func (a *admissionWindowAdapter) Applied(b []byte, n sessionhost.Notice, s sessionhost.Selection) (bool, error) {
+	applied, err := a.Adapter.Applied(b, n, s)
+	if a.window == "before-dispatch" && n.ID == "one" && applied && err == nil {
+		close(a.entered)
+		<-a.release
+	}
+	return applied, err
+}
+func awaitAdmissionWindow(t *testing.T, a *admissionWindowAdapter) {
+	t.Helper()
+	select {
+	case <-a.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("AT1_WINDOW_NOT_REACHED", a.window)
+	}
+}
+
+// Each window has its own exact durable state: before-dispatch loss retains a
+// queued intent; after-prepare loss retains unknown. Both fence before the
+// second write, preserve intent on disk, refuse release/downgrade/recovery and
+// retain owned stop. Valid controls in both windows really perform two writes.
 func TestAdmissionLossAndRecovery(t *testing.T) {
-	for _, mode := range []string{"valid", "lease", "registration", "rollback", "unavailable", "timeout", "process"} {
-		t.Run(mode, func(t *testing.T) {
-			cfg, _ := setup(t, fixtureadapters.JSON{}, false)
-			cfg, p := admitted(t, cfg)
-			cfg.IOTimeout = 100 * time.Millisecond
-			if mode == "process" {
-				base := cfg.Admission.Process
-				cfg.Admission.Process = func(ctx context.Context, pid int) (admission.Process, error) {
-					got, err := base(ctx, pid)
-					p.mu.Lock()
-					bad := p.mode == "process"
-					p.mu.Unlock()
-					if bad {
-						got.UID++
+	for _, window := range []string{"before-dispatch", "after-prepare"} {
+		t.Run(window, func(t *testing.T) {
+			for _, mode := range []string{"valid", "lease", "registration", "rollback", "unavailable", "timeout", "process"} {
+				t.Run(mode, func(t *testing.T) {
+					gate := &admissionWindowAdapter{Adapter: fixtureadapters.JSON{}, window: window, entered: make(chan struct{}), release: make(chan struct{})}
+					cfg, _ := setup(t, gate, false)
+					cfg, p := admitted(t, cfg)
+					cfg.IOTimeout = 500 * time.Millisecond
+					if mode == "process" {
+						base := cfg.Admission.Process
+						cfg.Admission.Process = func(ctx context.Context, pid int) (admission.Process, error) {
+							got, err := base(ctx, pid)
+							p.mu.Lock()
+							bad := p.mode == "process"
+							p.mu.Unlock()
+							if bad {
+								got.UID++
+							}
+							return got, err
+						}
 					}
-					return got, err
-				}
-			}
-			h := openHost(t, cfg)
-			if _, err := h.Enqueue(sessionhost.Notice{ID: "one", Reference: "fixture/one"}); err != nil {
-				t.Fatal(err)
-			}
-			first := await(t, h, "one", "applied")
-			if first.Version != 2 || first.Admission == nil || first.Admission.Failed {
-				t.Fatal("valid admission not persisted")
-			}
-			// Caller mutation cannot alter the host's frozen expected binding.
-			original := *cfg.Admission
-			cfg.Admission.Expected.Record.Binding.Model = "caller-mutated"
-			p.set(mode)
-			if _, err := h.Enqueue(sessionhost.Notice{ID: "two", Reference: "fixture/two"}); err != nil {
-				t.Fatal(err)
-			}
-			if mode == "valid" {
-				await(t, h, "two", "applied")
-				if got := inspectRunner(t, cfg); got.Writes != 2 {
-					t.Fatal("valid admission suppressed writes")
-				}
-				cfg.Admission = &original
-				return
-			}
-			awaitAdmissionFailure(t, h)
-			if got := inspectRunner(t, cfg); got.Writes != 1 || got.PID != p.proof.Record.Binding.Harness.PID {
-				t.Fatal("admission loss allowed an effect or replaced child")
-			}
-			if err := h.Fence(true); err == nil || err.Error() != "reconciliation_required" {
-				t.Fatalf("release after admission loss: %v", err)
-			}
-			bytes, err := os.ReadFile(filepath.Join(cfg.StateDir, "state.json"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var disk sessionhost.State
-			if json.Unmarshal(bytes, &disk) != nil || disk.Admission == nil || !disk.Admission.Failed || disk.Fence != "unknown" || disk.Records[1].State != "queued" {
-				t.Fatal("failed gate or queued intent was lost")
-			}
-			// Restoring provider availability does not clear the durable failed latch.
-			p.set("valid")
-			cfg.Admission = &original
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			if _, err := h.Stop(ctx); err != nil {
-				t.Fatalf("owned stop unavailable: %v", err)
-			}
-			h.Close()
-			if recovered, err := sessionhost.Open(cfg); err == nil {
-				recovered.Close()
-				t.Fatal("failed admission silently recovered")
-			}
-			cfg.Admission = nil
-			if recovered, err := sessionhost.Open(cfg); err == nil {
-				recovered.Close()
-				t.Fatal("admitted store downgraded to fixture mode")
+					h := openHost(t, cfg)
+					// Cleanup releases the test-owned barrier before openHost's Close.
+					t.Cleanup(gate.unblock)
+					if _, err := h.Enqueue(sessionhost.Notice{ID: "one", Reference: "fixture/one"}); err != nil {
+						t.Fatal(err)
+					}
+					if window == "before-dispatch" {
+						awaitAdmissionWindow(t, gate)
+					} else {
+						first := await(t, h, "one", "applied")
+						if first.Version != 2 || first.Admission == nil || first.Admission.Failed {
+							t.Fatal("valid admission not persisted")
+						}
+					}
+					original := *cfg.Admission
+					cfg.Admission.Expected.Record.Binding.Model = "caller-mutated"
+					if window == "before-dispatch" {
+						p.set(mode)
+					}
+					if _, err := h.Enqueue(sessionhost.Notice{ID: "two", Reference: "fixture/two"}); err != nil {
+						t.Fatal(err)
+					}
+					wantAtBarrier := "queued"
+					if window == "after-prepare" {
+						awaitAdmissionWindow(t, gate)
+						wantAtBarrier = "unknown"
+					}
+					atBarrier := h.Snapshot()
+					if len(atBarrier.Records) != 2 || atBarrier.Records[1].State != wantAtBarrier {
+						t.Fatalf("AT1_WINDOW_STATE: %s want=%s got=%+v", window, wantAtBarrier, atBarrier.Records)
+					}
+					if got := inspectRunner(t, cfg); got.Writes != 1 || got.PID != p.proof.Record.Binding.Harness.PID {
+						t.Fatal("AT1_BARRIER_EFFECT: unexpected write or child")
+					}
+					if window == "after-prepare" {
+						p.set(mode)
+					}
+					gate.unblock()
+					if mode == "valid" {
+						await(t, h, "two", "applied")
+						if got := inspectRunner(t, cfg); got.Writes != 2 {
+							t.Fatal("AT1_VALID_CONTROL: valid admission suppressed writes")
+						}
+						cfg.Admission = &original
+						return
+					}
+					awaitAdmissionFailure(t, h)
+					if got := inspectRunner(t, cfg); got.Writes != 1 || got.PID != p.proof.Record.Binding.Harness.PID {
+						t.Fatal("AT1_NO_SECOND_EFFECT: admission loss allowed an effect or replaced child")
+					}
+					if err := h.Fence(true); err == nil || err.Error() != "reconciliation_required" {
+						t.Fatalf("AT1_RELEASE_REFUSAL: %v", err)
+					}
+					data, err := os.ReadFile(filepath.Join(cfg.StateDir, "state.json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					var disk sessionhost.State
+					if json.Unmarshal(data, &disk) != nil || disk.Version != 2 || disk.Admission == nil || !disk.Admission.Failed || disk.Fence != "unknown" || disk.InputState != sessionhost.InputUnknown || len(disk.Records) != 2 {
+						t.Fatal("AT1_DURABLE_FENCE: failed gate or intent lost")
+					}
+					if disk.Records[0].State != "applied" {
+						t.Fatal("AT1_FIRST_INTENT: first acknowledgement lost")
+					}
+					marker := "AT1_BEFORE_DISPATCH_STATE"
+					if window == "after-prepare" {
+						marker = "AT1_AFTER_PREPARE_STATE"
+					}
+					if disk.Records[1].State != wantAtBarrier {
+						t.Fatalf("%s: want=%s got=%s", marker, wantAtBarrier, disk.Records[1].State)
+					}
+					if disk.Records[1].Notice != (sessionhost.Notice{ID: "two", Reference: "fixture/two"}) || disk.Records[1].Sequence != 2 {
+						t.Fatal("AT1_RETAINED_INTENT: intent changed")
+					}
+					// Provider recovery never clears the persisted failed latch.
+					p.set("valid")
+					cfg.Admission = &original
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					stopped, err := h.Stop(ctx)
+					if err != nil || stopped.Code != "stopped" || !stopped.Exited || stopped.Writes != 1 || stopped.PID != p.proof.Record.Binding.Harness.PID {
+						t.Fatalf("AT1_OWNED_STOP: code=%s exited=%t writes=%d err=%v", stopped.Code, stopped.Exited, stopped.Writes, err)
+					}
+					h.Close()
+					closedDisk, err := os.ReadFile(filepath.Join(cfg.StateDir, "state.json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if recovered, err := sessionhost.Open(cfg); err == nil || recovered != nil || err.Error() != "admission_reconciliation_required" {
+						if recovered != nil {
+							recovered.Close()
+						}
+						t.Fatalf("AT1_RECOVERY_REFUSAL: want reconciliation required got %v", err)
+					}
+					cfg.Admission = nil
+					if recovered, err := sessionhost.Open(cfg); err == nil || recovered != nil || err.Error() != "admission_reconciliation_required" {
+						if recovered != nil {
+							recovered.Close()
+						}
+						t.Fatalf("AT1_DOWNGRADE_REFUSAL: want reconciliation required got %v", err)
+					}
+					finalDisk, err := os.ReadFile(filepath.Join(cfg.StateDir, "state.json"))
+					if err != nil || !bytes.Equal(closedDisk, finalDisk) {
+						t.Fatalf("AT1_REFUSAL_NO_EFFECT: failed restore changed disk: %v", err)
+					}
+					t.Logf("AT1_WINDOW_RECEIPT window=%s mode=%s second=%s writes=1 release=refused recovery=refused downgrade=refused owned-stop=usable", window, mode, wantAtBarrier)
+				})
 			}
 		})
 	}
