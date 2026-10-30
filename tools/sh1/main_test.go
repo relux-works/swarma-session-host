@@ -103,7 +103,18 @@ func candidateFixture(t *testing.T) (string, string, string) {
 	call(t, generateArgs(src, out, mod)...)
 	return src, out, mod
 }
+
+// Consumer cache directories are removed after real proxy-backed downloads;
+// deterministic tool reports and the existing positive fixture remain unchanged.
 func TestFixtureEndToEnd(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv("TMPDIR", cacheRoot)
+	defer func() {
+		dirs, err := filepath.Glob(filepath.Join(cacheRoot, "sh1-consumer-cache-*"))
+		if err != nil || len(dirs) != 0 {
+			t.Errorf("CONSUMER_CACHE_LEFTOVER: count=%d err=%v", len(dirs), err)
+		}
+	}()
 	src, cand, mod := candidateFixture(t)
 	cand2 := filepath.Join(t.TempDir(), "candidate")
 	call(t, generateArgs(src, cand2, mod)...)

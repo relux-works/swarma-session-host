@@ -46,7 +46,7 @@ func immutableWrite(p string, b []byte) error {
 	}
 	return write(p, b, 0644)
 }
-func consumer(root, checkout, version, proxy, report string) error {
+func consumer(root, checkout, version, proxy, report string) (resultErr error) {
 	m, files, e := candidate(root)
 	if e != nil {
 		return e
@@ -146,8 +146,8 @@ func consumer(root, checkout, version, proxy, report string) error {
 	if e != nil {
 		return e
 	}
-	defer os.RemoveAll(cache)
-	env := []string{"GOPROXY=" + proxyURL, "GOSUMDB=off", "GOPRIVATE=", "GONOPROXY=none", "GONOSUMDB=none", "GOWORK=off", "GOMODCACHE=" + cache, "GOFLAGS="}
+	defer func() { resultErr = removeConsumerCache(cache, resultErr) }()
+	env := []string{"GOPROXY=" + proxyURL, "GOSUMDB=off", "GOPRIVATE=", "GONOPROXY=none", "GONOSUMDB=none", "GOWORK=off", "GOMODCACHE=" + cache, "GOFLAGS=-modcacherw"}
 	invoke := func(args ...string) ([]byte, error) {
 		b, code, e := run(checkout, env, args...)
 		r.Commands = append(r.Commands, CommandResult{args, code})
@@ -258,4 +258,12 @@ func hashIfPresent(files map[string][]byte, p string) string {
 		return digest(b)
 	}
 	return ""
+}
+
+// Only the disposable private cache supplied by consumer is removed here.
+func removeConsumerCache(cache string, prior error) error {
+	if err := os.RemoveAll(cache); err != nil {
+		return errors.Join(prior, fmt.Errorf("consumer cache cleanup: %w", err))
+	}
+	return prior
 }
