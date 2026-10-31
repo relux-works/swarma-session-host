@@ -20,16 +20,18 @@ type Driver struct {
 	inputID, accepted, completed string
 	begun, restored, atTail      bool
 	noticeMode                   string
+	permissionPolicy             string
 }
 
 type driverRecord struct {
-	Version    int             `json:"version"`
-	Stream     json.RawMessage `json:"stream"`
-	InputID    string          `json:"input_id"`
-	Accepted   string          `json:"accepted"`
-	Completed  string          `json:"completed"`
-	Begun      bool            `json:"begun"`
-	NoticeMode string          `json:"notice_mode,omitempty"`
+	Version          int             `json:"version"`
+	Stream           json.RawMessage `json:"stream"`
+	InputID          string          `json:"input_id"`
+	Accepted         string          `json:"accepted"`
+	Completed        string          `json:"completed"`
+	Begun            bool            `json:"begun"`
+	NoticeMode       string          `json:"notice_mode,omitempty"`
+	PermissionPolicy string          `json:"permission_policy,omitempty"`
 }
 
 var _ ap.Driver = (*Driver)(nil)
@@ -39,7 +41,12 @@ const ObservedRelease = "0.164.0"
 const (
 	SyntheticNotice = "synthetic"
 	WorkReference   = "work-reference"
+	YoloPolicy      = "yolo"
 )
+
+// DriverOptions records separately admitted rendering and permission choices.
+// Work-reference mode itself never implies permission to run tools.
+type DriverOptions struct{ NoticeMode, PermissionPolicy string }
 
 func Descriptor() ap.Descriptor {
 	return ap.Descriptor{Version: ap.Version, ObservedRelease: ObservedRelease, Name: "codex", PrimaryTransport: "pipe", Capabilities: ap.Capabilities{NextTurn: true, NativeTurnIdentity: true, Activity: true, IdleFence: true}}
@@ -56,13 +63,22 @@ func OpenDriver(cfg ap.Config, saved []byte) (*Driver, uint64, error) {
 }
 
 // OpenDriverWithMode binds rendering to the checkpoint without widening the
-// shared protocol boundary. Empty mode retains the legacy synthetic default.
+// shared protocol boundary. Empty mode retains the legacy synthetic default;
+// work-reference requires a separately admitted policy through DriverOptions.
 func OpenDriverWithMode(cfg ap.Config, mode string, saved []byte) (*Driver, uint64, error) {
+	return OpenDriverWithOptions(cfg, DriverOptions{NoticeMode: mode}, saved)
+}
+
+func OpenDriverWithOptions(cfg ap.Config, opts DriverOptions, saved []byte) (*Driver, uint64, error) {
+	mode := opts.NoticeMode
 	if mode == "" {
 		mode = SyntheticNotice
 	}
 	if mode != SyntheticNotice && mode != WorkReference {
 		return nil, 0, errors.New("unsupported_notice_mode")
+	}
+	if (mode == WorkReference && opts.PermissionPolicy != YoloPolicy) || (mode == SyntheticNotice && opts.PermissionPolicy != "") {
+		return nil, 0, errors.New("unsupported_permission_policy")
 	}
 	if cfg.NativeRelease != ObservedRelease || !Descriptor().SupportsLifecycle(cfg) || cfg.NativeSession != "" {
 		return nil, 0, ap.ErrUnsupported
@@ -70,20 +86,21 @@ func OpenDriverWithMode(cfg ap.Config, mode string, saved []byte) (*Driver, uint
 	c := Config{Provider: cfg.Selection.Provider, Model: cfg.Selection.Model, Effort: cfg.Selection.Effort, Workspace: cfg.Workspace}
 	if mode == WorkReference {
 		c.NoticeMode = WorkReference
+		c.PermissionPolicy = opts.PermissionPolicy
 	}
 	if len(saved) == 0 {
 		s, err := NewStream(c)
 		if err != nil {
 			return nil, 0, err
 		}
-		return &Driver{stream: s, noticeMode: mode}, 0, nil
+		return &Driver{stream: s, noticeMode: mode, permissionPolicy: opts.PermissionPolicy}, 0, nil
 	}
 	if len(saved) > ap.MaxCheckpoint || !json.Valid(saved) || !uniqueKeys(saved) {
 		return nil, 0, errors.New("driver_checkpoint_refused")
 	}
 	fields := []string{"version", "stream", "input_id", "accepted", "completed", "begun"}
 	if mode == WorkReference {
-		fields = append(fields, "notice_mode")
+		fields = append(fields, "notice_mode", "permission_policy")
 	}
 	if _, ok := requiredFields(saved, fields...); !ok {
 		return nil, 0, errors.New("driver_checkpoint_refused")
@@ -91,7 +108,7 @@ func OpenDriverWithMode(cfg ap.Config, mode string, saved []byte) (*Driver, uint
 	var r driverRecord
 	decoder := json.NewDecoder(bytes.NewReader(saved))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&r) != nil || !((r.Version == 1 && r.NoticeMode == "" && mode == SyntheticNotice) || (r.Version == 2 && r.NoticeMode == WorkReference && mode == WorkReference)) {
+	if decoder.Decode(&r) != nil || !((r.Version == 1 && r.NoticeMode == "" && r.PermissionPolicy == "" && mode == SyntheticNotice) || (r.Version == 3 && r.NoticeMode == WorkReference && mode == WorkReference && r.PermissionPolicy == opts.PermissionPolicy)) {
 		return nil, 0, errors.New("driver_checkpoint_refused")
 	}
 	for _, v := range []string{r.InputID, r.Accepted, r.Completed} {
@@ -109,7 +126,7 @@ func OpenDriverWithMode(cfg ap.Config, mode string, saved []byte) (*Driver, uint
 	if err != nil {
 		return nil, 0, err
 	}
-	return &Driver{stream: s, inputID: r.InputID, accepted: r.Accepted, completed: r.Completed, begun: r.Begun, restored: true, noticeMode: mode}, offset, nil
+	return &Driver{stream: s, inputID: r.InputID, accepted: r.Accepted, completed: r.Completed, begun: r.Begun, restored: true, noticeMode: mode, permissionPolicy: opts.PermissionPolicy}, offset, nil
 }
 
 func (d *Driver) checkpoint() ([]byte, error) {
@@ -119,8 +136,9 @@ func (d *Driver) checkpoint() ([]byte, error) {
 	}
 	r := driverRecord{Version: 1, Stream: b, InputID: d.inputID, Accepted: d.accepted, Completed: d.completed, Begun: d.begun}
 	if d.noticeMode == WorkReference {
-		r.Version = 2
+		r.Version = 3
 		r.NoticeMode = WorkReference
+		r.PermissionPolicy = d.permissionPolicy
 	}
 	return json.Marshal(r)
 }

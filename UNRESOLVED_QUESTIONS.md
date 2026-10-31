@@ -1,7 +1,8 @@
 # Unresolved questions
 
 - **First real-work use:** qualify the explicitly admitted Curator/Codex
-  app-server route, including effective thread permissions, actual task output,
+  app-server route, including effective thread/turn permissions from the explicit
+  policy transport, actual task output,
   retained runner/native identity across host replacement and owned descendant
   cleanup. The current runner's stop receipt proves its original direct child
   was reaped; it does not prove every wrapper descendant exited. A native

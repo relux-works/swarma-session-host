@@ -39,13 +39,14 @@ func main() {
 func serve(args []string) int {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
 	var cfg sessionhost.Config
-	var socket, adapter, inputState, workspace, nativeRelease string
+	var socket, adapter, inputState, workspace, nativeRelease, codexPolicy string
 	flags.StringVar(&socket, "socket", "", "absolute private host socket")
 	flags.StringVar(&cfg.Socket, "runner", "", "absolute runner socket")
 	flags.StringVar(&cfg.StateDir, "state", "", "absolute private state directory")
 	flags.StringVar(&cfg.Execution, "execution", "", "fixture execution identifier")
 	flags.StringVar(&adapter, "adapter", "", "json-fixture, line-fixture or codex")
 	flags.StringVar(&cfg.NoticeMode, "notice-mode", sessionhost.SyntheticNotice, "synthetic or opt-in work-reference (Codex only)")
+	flags.StringVar(&codexPolicy, "codex-policy", "", "separately admitted yolo policy; required for work-reference")
 	flags.StringVar(&inputState, "input-state", "", "explicit synthetic input state; idle permits delivery")
 	flags.StringVar(&cfg.Selection.Vendor, "vendor", "", "opaque fixture selection")
 	flags.StringVar(&cfg.Selection.Model, "model", "", "opaque fixture selection")
@@ -61,6 +62,9 @@ func serve(args []string) int {
 	if (cfg.NoticeMode != sessionhost.SyntheticNotice && cfg.NoticeMode != sessionhost.WorkReference) || (cfg.NoticeMode == sessionhost.WorkReference && adapter != "codex") {
 		fail("unsupported_notice_mode", 2)
 	}
+	if (cfg.NoticeMode == sessionhost.WorkReference && codexPolicy != codexadapter.YoloPolicy) || (cfg.NoticeMode == sessionhost.SyntheticNotice && codexPolicy != "") {
+		fail("unsupported_codex_policy", 2)
+	}
 	switch adapter {
 	case "json-fixture":
 		cfg.Adapter = fixtureadapters.JSON{}
@@ -72,7 +76,7 @@ func serve(args []string) int {
 		}
 		cfg.ProtocolName = "codex"
 		cfg.ProtocolFactory = func(saved []byte) (ap.Driver, uint64, error) {
-			return codexadapter.OpenDriverWithMode(ap.Config{NativeRelease: nativeRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: workspace}, cfg.NoticeMode, saved)
+			return codexadapter.OpenDriverWithOptions(ap.Config{NativeRelease: nativeRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: workspace}, codexadapter.DriverOptions{NoticeMode: cfg.NoticeMode, PermissionPolicy: codexPolicy}, saved)
 		}
 	default:
 		fail("unsupported_adapter", 2)

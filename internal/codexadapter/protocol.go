@@ -28,7 +28,8 @@ const (
 type Config struct {
 	Model, Provider, Effort, Workspace string
 	// Empty preserves the legacy synthetic plan digest and protocol behavior.
-	NoticeMode string `json:",omitempty"`
+	NoticeMode       string `json:",omitempty"`
+	PermissionPolicy string `json:",omitempty"`
 }
 type Snapshot struct {
 	State                       State
@@ -51,6 +52,9 @@ type Protocol struct {
 func New(cfg Config) (*Protocol, error) {
 	if cfg.NoticeMode != "" && cfg.NoticeMode != WorkReference {
 		return nil, errors.New("unsupported_notice_mode")
+	}
+	if (cfg.NoticeMode == WorkReference && cfg.PermissionPolicy != YoloPolicy) || (cfg.NoticeMode == "" && cfg.PermissionPolicy != "") {
+		return nil, errors.New("unsupported_permission_policy")
 	}
 	for _, v := range []string{cfg.Model, cfg.Provider, cfg.Effort} {
 		if !identifier(v) {
@@ -124,7 +128,12 @@ func (p *Protocol) Submit(text string) ([]byte, error) {
 	p.view.State = Busy
 	p.view.Turn = ""
 	p.view.CompletedTurn = ""
-	return p.requestFrame("turn/start", map[string]any{"threadId": p.view.Thread, "model": p.cfg.Model, "effort": p.cfg.Effort, "input": []any{map[string]string{"type": "text", "text": text}}}), nil
+	params := map[string]any{"threadId": p.view.Thread, "model": p.cfg.Model, "effort": p.cfg.Effort, "input": []any{map[string]string{"type": "text", "text": text}}}
+	if p.cfg.PermissionPolicy == YoloPolicy {
+		params["approvalPolicy"] = "never"
+		params["sandboxPolicy"] = map[string]string{"type": "dangerFullAccess"}
+	}
+	return p.requestFrame("turn/start", params), nil
 }
 
 type envelope struct {
@@ -184,7 +193,12 @@ func (p *Protocol) Consume(b []byte) ([][]byte, error) {
 			return p.fail("initialize_reply_refused")
 		}
 		p.phase = "thread"
-		return [][]byte{frame(map[string]any{"method": "initialized", "params": map[string]any{}}), p.requestFrame("thread/start", map[string]any{"model": p.cfg.Model, "modelProvider": p.cfg.Provider, "cwd": p.cfg.Workspace})}, nil
+		params := map[string]any{"model": p.cfg.Model, "modelProvider": p.cfg.Provider, "cwd": p.cfg.Workspace}
+		if p.cfg.PermissionPolicy == YoloPolicy {
+			params["approvalPolicy"] = "never"
+			params["sandbox"] = "danger-full-access"
+		}
+		return [][]byte{frame(map[string]any{"method": "initialized", "params": map[string]any{}}), p.requestFrame("thread/start", params)}, nil
 	case "thread/start":
 		var r struct {
 			Thread struct {
@@ -195,6 +209,18 @@ func (p *Protocol) Consume(b []byte) ([][]byte, error) {
 		}
 		if json.Unmarshal(e.Result, &r) != nil || !identifier(r.Thread.ID) || r.Model != p.cfg.Model || r.Provider != p.cfg.Provider {
 			return p.fail("thread_reply_refused")
+		}
+		if p.cfg.PermissionPolicy == YoloPolicy {
+			var policy struct {
+				ApprovalPolicy string `json:"approvalPolicy"`
+				Sandbox        struct {
+					Type string `json:"type"`
+				} `json:"sandbox"`
+				Cwd string `json:"cwd"`
+			}
+			if json.Unmarshal(e.Result, &policy) != nil || policy.ApprovalPolicy != "never" || policy.Sandbox.Type != "dangerFullAccess" || policy.Cwd != p.cfg.Workspace {
+				return p.fail("thread_policy_refused")
+			}
 		}
 		p.view.Thread = r.Thread.ID
 		p.view.State = Idle

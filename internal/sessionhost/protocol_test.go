@@ -58,7 +58,13 @@ func TestProtocolProcess(t *testing.T) {
 					time.Sleep(time.Millisecond)
 				}
 			}
-			write(map[string]any{"id": r.ID, "result": map[string]any{"thread": map[string]any{"id": "synthetic-thread"}, "model": r.Params["model"], "modelProvider": r.Params["modelProvider"]}})
+			result := map[string]any{"thread": map[string]any{"id": "synthetic-thread"}, "model": r.Params["model"], "modelProvider": r.Params["modelProvider"]}
+			if r.Params["approvalPolicy"] != nil {
+				result["approvalPolicy"] = r.Params["approvalPolicy"]
+				result["cwd"] = r.Params["cwd"]
+				result["sandbox"] = map[string]string{"type": "dangerFullAccess"}
+			}
+			write(map[string]any{"id": r.ID, "result": result})
 			if mode == "eof-live" {
 				deadline := time.Now().Add(10 * time.Second)
 				for {
@@ -153,7 +159,11 @@ func setupProtocolNoticeMode(t *testing.T, mode, noticeMode string) (sessionhost
 		Selection:    sessionhost.Selection{Vendor: "unfamiliar-provider", Model: "unfamiliar-model", Reasoning: "unfamiliar-effort"},
 		ProtocolName: "codex", PollInterval: 10 * time.Millisecond, IOTimeout: time.Second}
 	cfg.ProtocolFactory = func(saved []byte) (ap.Driver, uint64, error) {
-		return codexadapter.OpenDriverWithMode(ap.Config{NativeRelease: codexadapter.ObservedRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: dir}, noticeMode, saved)
+		opts := codexadapter.DriverOptions{NoticeMode: noticeMode}
+		if noticeMode == sessionhost.WorkReference {
+			opts.PermissionPolicy = codexadapter.YoloPolicy
+		}
+		return codexadapter.OpenDriverWithOptions(ap.Config{NativeRelease: codexadapter.ObservedRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: dir}, opts, saved)
 	}
 	return cfg, s, dir
 }

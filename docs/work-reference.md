@@ -11,6 +11,11 @@ Unknown modes and work mode on a fixture adapter refuse. Vendor, model and
 reasoning remain opaque strings. The native release remains pinned to 0.164.0;
 a declaration in a flag does not verify the actual running executable.
 
+Work mode additionally requires `--codex-policy yolo`, a separately admitted
+permission choice. Missing, unknown or conflicting policy refuses before native
+initialization. The notice mode never selects permissions on its own. Synthetic
+mode rejects this option and retains its existing request fields.
+
 ## Run
 
 First admit one isolated workspace, its actual task references and output paths,
@@ -29,6 +34,7 @@ for nonsecret deployment values, not credentials:
 .temp/prototype/bin/swarma-session-host serve \
   --socket "$HOST_SOCKET" --runner "$RUNNER_SOCKET" --state "$HOST_STATE" \
   --execution "$EXECUTION" --adapter codex --notice-mode work-reference \
+  --codex-policy yolo \
   --workspace "$WORKSPACE" --native-release 0.164.0 \
   --vendor "$VENDOR" --model "$MODEL" --reasoning "$EFFORT" \
   --io-timeout 5s --poll-interval 25ms
@@ -57,12 +63,23 @@ sharing an OS account.
 
 Rendering mode cannot change within an execution. Legacy host state versions 1/2
 and Codex driver checkpoint version 1 mean synthetic only. Work mode uses host
-state version 3 and driver checkpoint version 2, both carrying explicit mode;
-its stream plan digest and notice intent digest also bind that mode. Missing,
+state version 3 and driver checkpoint version 3, both carrying explicit mode;
+the driver checkpoint and stream plan digest also bind the explicit permission
+policy. The notice intent digest binds mode. Missing,
 unknown or mismatched mode/version refuses before native initialization or a
 runner write. The host also checks the factory's immutable `NoticeMode()`
 metadata; a work factory without that declaration refuses. The shared
 `adapterprotocol` version 1 interface is unchanged.
+
+For the admitted yolo policy, the pinned adapter sends `approvalPolicy: never`
+and `sandbox: danger-full-access` in `thread/start`, and repeats
+`approvalPolicy: never` with `sandboxPolicy: {type: dangerFullAccess}` in
+`turn/start`. It validates the thread response's approval policy, sandbox type
+and exact workspace; the pinned turn response has no policy echo. The
+interactive bypass flag alone does not establish this app-server policy.
+No raw configuration overrides are accepted. These request/response checks
+still require exact-binary effective-policy qualification before real use.
+The earlier work checkpoint version 2 cannot restore into this contract.
 
 Exact ID/reference retries retain one intent. A changed reference with the same
 ID conflicts. A restart cannot turn queued or uncertain synthetic input into work,
@@ -119,7 +136,8 @@ GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 \
   ./internal/codexadapter ./internal/sessionhost
 ```
 
-Tests cover default rendering, explicit work rendering, mode/checkpoint/digest
+Tests cover default rendering, explicit work rendering, separate policy admission
+and transport, missing/conflicting policy echoes, mode/checkpoint/digest
 refusals, same-mode replacement, exact retries, stale epochs, hold/busy/security
 stop, uncertain-write recovery, output termination and visible tool refusal.
 These use inert owned fixtures. Actual first-use evidence remains a separate

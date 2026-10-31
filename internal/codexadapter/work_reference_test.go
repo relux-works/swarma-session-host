@@ -2,15 +2,25 @@ package codexadapter
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 
 	ap "github.com/relux-works/swarma-session-host/internal/adapterprotocol"
 )
 
+func openNoticeMode(mode string, saved []byte) (*Driver, uint64, error) {
+	opts := DriverOptions{NoticeMode: mode}
+	if mode == WorkReference {
+		opts.PermissionPolicy = YoloPolicy
+	}
+	return OpenDriverWithOptions(driverConfig(), opts, saved)
+}
+
 func idleWorkDriver(t *testing.T) (*Driver, uint64) {
 	t.Helper()
-	d, _, err := OpenDriverWithMode(driverConfig(), WorkReference, nil)
+	d, _, err := openNoticeMode(WorkReference, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +29,7 @@ func idleWorkDriver(t *testing.T) (*Driver, uint64) {
 	}
 	var offset uint64
 	observe(t, d, &offset, `{"id":1,"result":{"userAgent":"synthetic","platformFamily":"unix","platformOs":"macos"}}`)
-	x := observe(t, d, &offset, `{"id":2,"result":{"thread":{"id":"thread-a"},"model":"unfamiliar-model","modelProvider":"unfamiliar-provider"}}`)
+	x := observe(t, d, &offset, `{"id":2,"result":{"thread":{"id":"thread-a"},"model":"unfamiliar-model","modelProvider":"unfamiliar-provider","approvalPolicy":"never","sandbox":{"type":"dangerFullAccess"},"cwd":"/tmp/synthetic"}}`)
 	if x.View.Activity != ap.Idle {
 		t.Fatal("fixture did not reach idle")
 	}
@@ -76,12 +86,12 @@ func TestWorkReferenceCheckpointBinding(t *testing.T) {
 		{SyntheticNotice, work.Snapshot().Checkpoint},
 		{"unknown", nil},
 	} {
-		if d, _, err := OpenDriverWithMode(driverConfig(), tc.mode, tc.saved); err == nil || d != nil {
+		if d, _, err := openNoticeMode(tc.mode, tc.saved); err == nil || d != nil {
 			t.Fatal("mode mismatch constructed a driver")
 		}
 	}
 	saved := work.Snapshot().Checkpoint
-	for _, mutation := range []string{"missing", "unknown", "synthetic", "old-version", "stream-mode"} {
+	for _, mutation := range []string{"missing", "unknown", "synthetic", "old-version", "old-work-version", "missing-policy", "wrong-policy", "stream-mode", "unbound-policy"} {
 		var r map[string]json.RawMessage
 		json.Unmarshal(saved, &r)
 		switch mutation {
@@ -93,17 +103,36 @@ func TestWorkReferenceCheckpointBinding(t *testing.T) {
 			r["notice_mode"] = json.RawMessage(`"synthetic"`)
 		case "old-version":
 			r["version"] = json.RawMessage(`1`)
+		case "old-work-version":
+			r["version"] = json.RawMessage(`2`)
+		case "missing-policy":
+			delete(r, "permission_policy")
+		case "wrong-policy":
+			r["permission_policy"] = json.RawMessage(`"workspace-write"`)
 		case "stream-mode":
 			var old map[string]json.RawMessage
 			json.Unmarshal(legacy.Snapshot().Checkpoint, &old)
 			r["stream"] = old["stream"]
+		case "unbound-policy":
+			var stream map[string]json.RawMessage
+			json.Unmarshal(r["stream"], &stream)
+			var protocol map[string]json.RawMessage
+			json.Unmarshal(stream["protocol"], &protocol)
+			c := config()
+			// The intentionally bad digest binds mode but omits policy. This
+			// expectation is independent of the production planDigest helper.
+			unbound, _ := json.Marshal(struct{ Model, Provider, Effort, Workspace, NoticeMode string }{c.Model, c.Provider, c.Effort, c.Workspace, WorkReference})
+			sum := sha256.Sum256(unbound)
+			protocol["plan_digest"], _ = json.Marshal(hex.EncodeToString(sum[:]))
+			stream["protocol"], _ = json.Marshal(protocol)
+			r["stream"], _ = json.Marshal(stream)
 		}
 		bad, _ := json.Marshal(r)
-		if d, _, err := OpenDriverWithMode(driverConfig(), WorkReference, bad); err == nil || d != nil {
+		if d, _, err := openNoticeMode(WorkReference, bad); err == nil || d != nil {
 			t.Fatalf("%s checkpoint accepted", mutation)
 		}
 	}
-	r, from, err := OpenDriverWithMode(driverConfig(), WorkReference, saved)
+	r, from, err := openNoticeMode(WorkReference, saved)
 	if err != nil || from != offset {
 		t.Fatal("same-mode restore refused", err)
 	}
@@ -117,6 +146,94 @@ func TestWorkReferenceCheckpointBinding(t *testing.T) {
 	x, err = r.Observe(ap.Chunk{Offset: from, AtTail: true})
 	if err != nil || x.View.Activity != ap.Idle {
 		t.Fatal("valid catchup failed", err)
+	}
+}
+
+// Rendering never supplies authority implicitly. Work requires a separate known
+// policy; default synthetic emits no policy overrides, and valid work serializes
+// the pinned thread/turn fields without accepting arbitrary native configuration.
+func TestWorkReferenceExplicitPolicy(t *testing.T) {
+	for _, opts := range []DriverOptions{{NoticeMode: WorkReference}, {NoticeMode: WorkReference, PermissionPolicy: "workspace-write"}, {NoticeMode: SyntheticNotice, PermissionPolicy: YoloPolicy}} {
+		if d, _, err := OpenDriverWithOptions(driverConfig(), opts, nil); err == nil || err.Error() != "unsupported_permission_policy" || d != nil {
+			t.Fatal("policy was inferred or widened", err)
+		}
+	}
+	if d, _, err := OpenDriverWithMode(driverConfig(), WorkReference, nil); err == nil || err.Error() != "unsupported_permission_policy" || d != nil {
+		t.Fatal("mode-only constructor inferred authority", err)
+	}
+	c := config()
+	c.NoticeMode = WorkReference
+	if p, err := New(c); err == nil || err.Error() != "unsupported_permission_policy" || p != nil {
+		t.Fatal("protocol bypassed explicit policy", err)
+	}
+	d, _, err := openNoticeMode(WorkReference, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	var offset uint64
+	x := observe(t, d, &offset, `{"id":1,"result":{"userAgent":"synthetic","platformFamily":"unix","platformOs":"macos"}}`)
+	var request struct {
+		Method string                     `json:"method"`
+		Params map[string]json.RawMessage `json:"params"`
+	}
+	if len(x.Actions) != 2 || json.Unmarshal(x.Actions[1].Bytes, &request) != nil || request.Method != "thread/start" || string(request.Params["approvalPolicy"]) != `"never"` || string(request.Params["sandbox"]) != `"danger-full-access"` || request.Params["sandboxPolicy"] != nil {
+		t.Fatal("incorrect thread policy transport")
+	}
+	observe(t, d, &offset, `{"id":2,"result":{"thread":{"id":"thread-a"},"model":"unfamiliar-model","modelProvider":"unfamiliar-provider","approvalPolicy":"never","sandbox":{"type":"dangerFullAccess"},"cwd":"/tmp/synthetic"}}`)
+	x, err = d.Prepare(ap.Input{ID: "one", Reference: "task/one", Mode: ap.NextTurn})
+	request.Params = nil
+	if err != nil || len(x.Actions) != 1 || json.Unmarshal(x.Actions[0].Bytes, &request) != nil || request.Method != "turn/start" || string(request.Params["approvalPolicy"]) != `"never"` || string(request.Params["sandboxPolicy"]) != `{"type":"dangerFullAccess"}` || request.Params["sandbox"] != nil {
+		t.Fatal("incorrect turn policy transport", err)
+	}
+	legacy, _ := idleDriver(t)
+	x, err = legacy.Prepare(ap.Input{ID: "one", Reference: "task/one", Mode: ap.NextTurn})
+	if err != nil || bytes.Contains(x.Actions[0].Bytes, []byte("approvalPolicy")) || bytes.Contains(x.Actions[0].Bytes, []byte("sandboxPolicy")) {
+		t.Fatal("synthetic default gained policy overrides", err)
+	}
+}
+
+// Work thread replies must echo the requested approval/sandbox policy and exact
+// workspace. Missing/conflicting echoes close input before a work turn; the
+// valid control is the same initialization used by idleWorkDriver. No nonexistent
+// turn-policy echo is required, and these fixtures do not qualify a real binary.
+func TestWorkReferencePolicyEchoRefusal(t *testing.T) {
+	for _, plant := range []string{"missing-approval", "wrong-approval", "missing-sandbox", "wrong-sandbox", "wrong-workspace"} {
+		t.Run(plant, func(t *testing.T) {
+			d, _, err := openNoticeMode(WorkReference, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.Begin(); err != nil {
+				t.Fatal(err)
+			}
+			var offset uint64
+			observe(t, d, &offset, `{"id":1,"result":{"userAgent":"synthetic","platformFamily":"unix","platformOs":"macos"}}`)
+			result := map[string]any{"thread": map[string]string{"id": "thread-a"}, "model": "unfamiliar-model", "modelProvider": "unfamiliar-provider", "approvalPolicy": "never", "sandbox": map[string]string{"type": "dangerFullAccess"}, "cwd": "/tmp/synthetic"}
+			switch plant {
+			case "missing-approval":
+				delete(result, "approvalPolicy")
+			case "wrong-approval":
+				result["approvalPolicy"] = "on-request"
+			case "missing-sandbox":
+				delete(result, "sandbox")
+			case "wrong-sandbox":
+				result["sandbox"] = map[string]string{"type": "workspaceWrite"}
+			case "wrong-workspace":
+				result["cwd"] = "/tmp/different-workspace"
+			}
+			wire, _ := json.Marshal(map[string]any{"id": 2, "result": result})
+			wire = append(wire, '\n')
+			x, err := d.Observe(ap.Chunk{Offset: offset, Bytes: wire, AtTail: true})
+			if err == nil || err.Error() != "stream_protocol_refused" || x.View.Activity != ap.Unknown || len(x.Actions) != 0 || len(x.Facts) != 0 {
+				t.Fatal("policy echo accepted", err)
+			}
+			if x, err = d.Prepare(ap.Input{ID: "one", Reference: "task/one", Mode: ap.NextTurn}); err == nil || len(x.Actions) != 0 {
+				t.Fatal("policy refusal allowed work")
+			}
+		})
 	}
 }
 
@@ -179,7 +296,7 @@ func TestWorkReferencePendingRestoreAndGap(t *testing.T) {
 	if err != nil || len(x.Actions) != 1 {
 		t.Fatal("work prepare", err)
 	}
-	r, from, err := OpenDriverWithMode(driverConfig(), WorkReference, x.Checkpoint)
+	r, from, err := openNoticeMode(WorkReference, x.Checkpoint)
 	if err != nil || from != offset {
 		t.Fatal("pending restore", err)
 	}
