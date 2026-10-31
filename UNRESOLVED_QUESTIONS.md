@@ -1,5 +1,13 @@
 # Unresolved questions
 
+- **First real-work use:** qualify the explicitly admitted Curator/Codex
+  app-server route, including effective thread permissions, actual task output,
+  retained runner/native identity across host replacement and owned descendant
+  cleanup. The current runner's stop receipt proves its original direct child
+  was reaped; it does not prove every wrapper descendant exited. A native
+  interactive launch or a completed synthetic turn does not establish these
+  properties. This manual route calls no managed lease/observer API and makes
+  no automatic hosted-admission claim. See [work-reference mode](docs/work-reference.md).
 - **Launcher/model contract:** publish the jointly accepted string configuration
   and launcher-to-host/runner plan ownership, including where current manager
   admission is enforced. No second registry or unilateral payload extension.

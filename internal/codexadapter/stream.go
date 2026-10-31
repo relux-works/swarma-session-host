@@ -89,6 +89,13 @@ func (s *Stream) Feed(offset uint64, chunk []byte) ([][]byte, error) {
 		frames, err := s.protocol.Consume(s.partial)
 		s.partial = nil
 		if err != nil {
+			if s.protocol.cfg.NoticeMode == WorkReference {
+				// Preserve only these fixed local codes, never native error text.
+				switch err.Error() {
+				case "work_item_refused", "work_item_identity_conflict", "unsupported_work_item":
+					return s.lost(err.Error())
+				}
+			}
 			return s.lost("stream_protocol_refused")
 		}
 		out = append(out, frames...)

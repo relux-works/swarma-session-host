@@ -22,11 +22,13 @@ type ProtocolState struct {
 	BoundaryVersion int             `json:"boundary_version"`
 	ObservedRelease string          `json:"observed_release"`
 	Checkpoint      json.RawMessage `json:"checkpoint"`
-	WireSequence    uint64          `json:"wire_sequence"`
-	Pending         []WireAction    `json:"pending"`
-	View            ap.View         `json:"view"`
-	Attention       []ap.Attention  `json:"attention,omitempty"`
-	Usage           *ap.Usage       `json:"usage,omitempty"`
+	// Refusal is a fixed content-free code, never a native error or tool payload.
+	Refusal      string         `json:"refusal,omitempty"`
+	WireSequence uint64         `json:"wire_sequence"`
+	Pending      []WireAction   `json:"pending"`
+	View         ap.View        `json:"view"`
+	Attention    []ap.Attention `json:"attention,omitempty"`
+	Usage        *ap.Usage      `json:"usage,omitempty"`
 }
 type WireAction struct {
 	Sequence uint64 `json:"sequence"`
@@ -72,6 +74,9 @@ func validProtocolState(s State) bool {
 		return true
 	}
 	p := s.Protocol
+	if p != nil && p.Refusal != "" && (p.Refusal != "adapter_observation_refused" || s.Version != 3 || s.NoticeMode != WorkReference) {
+		return false
+	}
 	if p.BoundaryVersion != ap.Version || p.ObservedRelease == "" {
 		return false
 	}
@@ -227,12 +232,19 @@ func (h *Host) persistTransitionLocked(t ap.Transition) error {
 }
 
 func (h *Host) failProtocol() {
+	h.failProtocolObservation(false)
+}
+
+func (h *Host) failProtocolObservation(refused bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.protocolFailed = true
 	next := cloneState(h.state)
 	next.Fence = "unknown"
 	next.InputState = InputUnknown
+	if refused && next.NoticeMode == WorkReference {
+		next.Protocol.Refusal = "adapter_observation_refused"
+	}
 	_ = h.persistLocked(next)
 }
 
@@ -364,7 +376,7 @@ func (h *Host) pollProtocol() bool {
 	err = h.persistTransitionLocked(t)
 	h.mu.Unlock()
 	if observeErr != nil || err != nil || r.Exited || r.OutputEnded {
-		h.failProtocol()
+		h.failProtocolObservation(observeErr != nil)
 		return false
 	}
 	return true

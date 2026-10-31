@@ -25,7 +25,11 @@ const (
 
 // Config passes selection strings unchanged; supported values belong to Codex.
 // Workspace is admitted by the caller. No permission or credential overrides are added.
-type Config struct{ Model, Provider, Effort, Workspace string }
+type Config struct {
+	Model, Provider, Effort, Workspace string
+	// Empty preserves the legacy synthetic plan digest and protocol behavior.
+	NoticeMode string `json:",omitempty"`
+}
 type Snapshot struct {
 	State                       State
 	Thread, Turn, CompletedTurn string
@@ -45,6 +49,9 @@ type Protocol struct {
 }
 
 func New(cfg Config) (*Protocol, error) {
+	if cfg.NoticeMode != "" && cfg.NoticeMode != WorkReference {
+		return nil, errors.New("unsupported_notice_mode")
+	}
 	for _, v := range []string{cfg.Model, cfg.Provider, cfg.Effort} {
 		if !identifier(v) {
 			return nil, errors.New("invalid_selection_framing")
@@ -263,6 +270,9 @@ type turn struct {
 }
 
 func (p *Protocol) notification(e envelope) ([][]byte, error) {
+	if p.cfg.NoticeMode == WorkReference && (e.Method == "item/started" || e.Method == "item/completed") {
+		return p.workItem(e)
+	}
 	if e.Method != "turn/started" && e.Method != "turn/completed" {
 		return nil, nil
 	}
@@ -299,4 +309,32 @@ func (p *Protocol) notification(e envelope) ([][]byte, error) {
 	p.view.State = Idle
 	p.phase = "ready"
 	return nil, nil
+}
+
+// Tool item metadata is progress only. Payloads (commands, output and patches)
+// are discarded; no tool event authorizes an action or proves task completion.
+func (p *Protocol) workItem(e envelope) ([][]byte, error) {
+	var n struct {
+		Thread string `json:"threadId"`
+		Turn   string `json:"turnId"`
+		Item   struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(e.Params, &n) != nil || !identifier(n.Thread) || !identifier(n.Turn) || !identifier(n.Item.ID) {
+		return p.fail("work_item_refused")
+	}
+	if n.Thread != p.view.Thread {
+		return nil, nil
+	}
+	if p.phase != "turn" || p.view.State != Busy || n.Turn != p.view.Turn {
+		return p.fail("work_item_identity_conflict")
+	}
+	switch n.Item.Type {
+	case "userMessage", "agentMessage", "reasoning", "plan", "commandExecution", "fileChange":
+		return nil, nil
+	default:
+		return p.fail("unsupported_work_item")
+	}
 }

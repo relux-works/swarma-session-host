@@ -45,6 +45,7 @@ func serve(args []string) int {
 	flags.StringVar(&cfg.StateDir, "state", "", "absolute private state directory")
 	flags.StringVar(&cfg.Execution, "execution", "", "fixture execution identifier")
 	flags.StringVar(&adapter, "adapter", "", "json-fixture, line-fixture or codex")
+	flags.StringVar(&cfg.NoticeMode, "notice-mode", sessionhost.SyntheticNotice, "synthetic or opt-in work-reference (Codex only)")
 	flags.StringVar(&inputState, "input-state", "", "explicit synthetic input state; idle permits delivery")
 	flags.StringVar(&cfg.Selection.Vendor, "vendor", "", "opaque fixture selection")
 	flags.StringVar(&cfg.Selection.Model, "model", "", "opaque fixture selection")
@@ -57,6 +58,9 @@ func serve(args []string) int {
 	if flags.NArg() != 0 {
 		fail("unexpected_arguments", 2)
 	}
+	if (cfg.NoticeMode != sessionhost.SyntheticNotice && cfg.NoticeMode != sessionhost.WorkReference) || (cfg.NoticeMode == sessionhost.WorkReference && adapter != "codex") {
+		fail("unsupported_notice_mode", 2)
+	}
 	switch adapter {
 	case "json-fixture":
 		cfg.Adapter = fixtureadapters.JSON{}
@@ -68,7 +72,7 @@ func serve(args []string) int {
 		}
 		cfg.ProtocolName = "codex"
 		cfg.ProtocolFactory = func(saved []byte) (ap.Driver, uint64, error) {
-			return codexadapter.OpenDriver(ap.Config{NativeRelease: nativeRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: workspace}, saved)
+			return codexadapter.OpenDriverWithMode(ap.Config{NativeRelease: nativeRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: workspace}, cfg.NoticeMode, saved)
 		}
 	default:
 		fail("unsupported_adapter", 2)

@@ -99,6 +99,9 @@ func TestProtocolProcess(t *testing.T) {
 		case "turn/start":
 			turn := fmt.Sprintf("turn-%d", r.ID)
 			write(map[string]any{"id": r.ID, "result": map[string]any{"turn": map[string]any{"id": turn, "status": "inProgress"}}})
+			if mode == "unsupported-work-item" {
+				write(map[string]any{"method": "item/started", "params": map[string]any{"threadId": "synthetic-thread", "turnId": turn, "item": map[string]any{"id": "item-a", "type": "futureTool", "output": "private-refused-tool-canary"}}})
+			}
 			if mode == "approval" {
 				write(map[string]any{"id": "server-request", "method": "item/commandExecution/requestApproval", "params": map[string]any{"threadId": "synthetic-thread"}})
 				continue
@@ -124,6 +127,10 @@ func TestProtocolProcess(t *testing.T) {
 }
 
 func setupProtocol(t *testing.T, mode string) (sessionhost.Config, *runner.Server, string) {
+	return setupProtocolNoticeMode(t, mode, sessionhost.SyntheticNotice)
+}
+
+func setupProtocolNoticeMode(t *testing.T, mode, noticeMode string) (sessionhost.Config, *runner.Server, string) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "session-protocol-")
 	if err != nil {
@@ -142,10 +149,11 @@ func setupProtocol(t *testing.T, mode string) (sessionhost.Config, *runner.Serve
 	}
 	t.Cleanup(func() { s.Close() })
 	cfg := sessionhost.Config{StateDir: filepath.Join(dir, "state"), Socket: rc.Socket, Execution: rc.Execution,
+		NoticeMode:   noticeMode,
 		Selection:    sessionhost.Selection{Vendor: "unfamiliar-provider", Model: "unfamiliar-model", Reasoning: "unfamiliar-effort"},
 		ProtocolName: "codex", PollInterval: 10 * time.Millisecond, IOTimeout: time.Second}
 	cfg.ProtocolFactory = func(saved []byte) (ap.Driver, uint64, error) {
-		return codexadapter.OpenDriver(ap.Config{NativeRelease: codexadapter.ObservedRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: dir}, saved)
+		return codexadapter.OpenDriverWithMode(ap.Config{NativeRelease: codexadapter.ObservedRelease, Lifecycle: ap.Create, Selection: ap.Selection{Provider: cfg.Selection.Vendor, Model: cfg.Selection.Model, Effort: cfg.Selection.Reasoning}, Workspace: dir}, noticeMode, saved)
 	}
 	return cfg, s, dir
 }
@@ -168,7 +176,13 @@ func awaitProtocol(t *testing.T, h *sessionhost.Host, claim string, ready func(s
 // replacement keeps the child/thread and sends only the second turn: three
 // initialization writes plus two turns, independent from notice sequences 1/2.
 func TestProtocolHostAcceptanceAndReplacement(t *testing.T) {
-	cfg, _, dir := setupProtocol(t, "gated")
+	for _, mode := range []string{sessionhost.SyntheticNotice, sessionhost.WorkReference} {
+		t.Run(mode, func(t *testing.T) { protocolHostAcceptanceAndReplacement(t, mode) })
+	}
+}
+
+func protocolHostAcceptanceAndReplacement(t *testing.T, mode string) {
+	cfg, _, dir := setupProtocolNoticeMode(t, "gated", mode)
 	h := openHost(t, cfg)
 	awaitProtocol(t, h, "initial idle", func(s sessionhost.State) bool { return s.InputState == sessionhost.InputIdle })
 	if _, err := h.Enqueue(sessionhost.Notice{ID: "one", Reference: "synthetic/one"}); err != nil {
@@ -222,7 +236,13 @@ func TestProtocolHostAcceptanceAndReplacement(t *testing.T) {
 // A server approval request closes automatic input, retains the next notice,
 // and produces neither a completion nor an approval response, including restore.
 func TestProtocolApprovalNeverAnswered(t *testing.T) {
-	cfg, _, _ := setupProtocol(t, "approval")
+	for _, mode := range []string{sessionhost.SyntheticNotice, sessionhost.WorkReference} {
+		t.Run(mode, func(t *testing.T) { protocolApprovalNeverAnswered(t, mode) })
+	}
+}
+
+func protocolApprovalNeverAnswered(t *testing.T, mode string) {
+	cfg, _, _ := setupProtocolNoticeMode(t, "approval", mode)
 	h := openHost(t, cfg)
 	awaitProtocol(t, h, "idle", func(s sessionhost.State) bool { return s.InputState == sessionhost.InputIdle })
 	h.Enqueue(sessionhost.Notice{ID: "one", Reference: "synthetic/one"})
@@ -256,13 +276,19 @@ func TestProtocolApprovalNeverAnswered(t *testing.T) {
 // Additional snapshots cover pre-Prepare intent and receipt retirement before
 // native catch-up; only the written controls resolve, without another write.
 func TestProtocolOutboxRecoveryNeverResends(t *testing.T) {
+	for _, mode := range []string{sessionhost.SyntheticNotice, sessionhost.WorkReference} {
+		t.Run(mode, func(t *testing.T) { protocolOutboxRecoveryNeverResends(t, mode) })
+	}
+}
+
+func protocolOutboxRecoveryNeverResends(t *testing.T, noticeMode string) {
 	for _, effect := range []string{"written", "missing", "conflict", "unknown", "intent", "retired"} {
 		t.Run(effect, func(t *testing.T) {
 			mode := "normal"
 			if effect == "unknown" {
 				mode = "closed-stdin"
 			}
-			cfg, _, dir := setupProtocol(t, mode)
+			cfg, _, dir := setupProtocolNoticeMode(t, mode, noticeMode)
 			h := openHost(t, cfg)
 			before := awaitProtocol(t, h, "idle", func(s sessionhost.State) bool {
 				return s.InputState == sessionhost.InputIdle && len(s.Protocol.Pending) == 0
@@ -290,6 +316,13 @@ func TestProtocolOutboxRecoveryNeverResends(t *testing.T) {
 				Notice    sessionhost.Notice
 				Selection sessionhost.Selection
 			}{notice, cfg.Selection})
+			if noticeMode == sessionhost.WorkReference {
+				encoded, _ = json.Marshal(struct {
+					Mode      string
+					Notice    sessionhost.Notice
+					Selection sessionhost.Selection
+				}{sessionhost.WorkReference, notice, cfg.Selection})
+			}
 			noticeHash := sha256.Sum256(encoded)
 			before.Records = []sessionhost.Record{{Notice: notice, Digest: hex.EncodeToString(noticeHash[:]), Sequence: 1, State: "unknown"}}
 			originalCheckpoint, originalView := before.Protocol.Checkpoint, before.Protocol.View
@@ -418,13 +451,19 @@ func TestProtocolOutboxRecoveryNeverResends(t *testing.T) {
 // A live child closing only stdout must permanently close automatic delivery,
 // including host replacement. The ordinary live-output variant delivers once.
 func TestProtocolLiveOutputTermination(t *testing.T) {
+	for _, mode := range []string{sessionhost.SyntheticNotice, sessionhost.WorkReference} {
+		t.Run(mode, func(t *testing.T) { protocolLiveOutputTermination(t, mode) })
+	}
+}
+
+func protocolLiveOutputTermination(t *testing.T, noticeMode string) {
 	for _, ended := range []bool{false, true} {
 		t.Run(fmt.Sprint(ended), func(t *testing.T) {
 			mode := "normal"
 			if ended {
 				mode = "eof-live"
 			}
-			cfg, _, dir := setupProtocol(t, mode)
+			cfg, _, dir := setupProtocolNoticeMode(t, mode, noticeMode)
 			h := openHost(t, cfg)
 			awaitProtocol(t, h, "initial idle", func(s sessionhost.State) bool { return s.InputState == sessionhost.InputIdle })
 			initial := inspectRunner(t, cfg)

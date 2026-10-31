@@ -13,56 +13,85 @@ import (
 )
 
 // Driver adapts the release-specific parser to the shared host-side boundary.
-// It performs no I/O and currently qualifies next-turn synthetic notices only.
+// It performs no I/O. Work-reference rendering requires explicit construction.
 type Driver struct {
 	mu                           sync.Mutex
 	stream                       *Stream
 	inputID, accepted, completed string
 	begun, restored, atTail      bool
+	noticeMode                   string
 }
 
 type driverRecord struct {
-	Version   int             `json:"version"`
-	Stream    json.RawMessage `json:"stream"`
-	InputID   string          `json:"input_id"`
-	Accepted  string          `json:"accepted"`
-	Completed string          `json:"completed"`
-	Begun     bool            `json:"begun"`
+	Version    int             `json:"version"`
+	Stream     json.RawMessage `json:"stream"`
+	InputID    string          `json:"input_id"`
+	Accepted   string          `json:"accepted"`
+	Completed  string          `json:"completed"`
+	Begun      bool            `json:"begun"`
+	NoticeMode string          `json:"notice_mode,omitempty"`
 }
 
 var _ ap.Driver = (*Driver)(nil)
 
 const ObservedRelease = "0.164.0"
 
+const (
+	SyntheticNotice = "synthetic"
+	WorkReference   = "work-reference"
+)
+
 func Descriptor() ap.Descriptor {
 	return ap.Descriptor{Version: ap.Version, ObservedRelease: ObservedRelease, Name: "codex", PrimaryTransport: "pipe", Capabilities: ap.Capabilities{NextTurn: true, NativeTurnIdentity: true, Activity: true, IdleFence: true}}
 }
 func (d *Driver) Descriptor() ap.Descriptor { return Descriptor() }
 
+// NoticeMode is immutable construction metadata, not a runtime grant.
+func (d *Driver) NoticeMode() string { return d.noticeMode }
+
 // OpenDriver restores metadata only. The returned offset is a replay request,
 // never authority to trust an unobserved runner or write another turn.
 func OpenDriver(cfg ap.Config, saved []byte) (*Driver, uint64, error) {
+	return OpenDriverWithMode(cfg, SyntheticNotice, saved)
+}
+
+// OpenDriverWithMode binds rendering to the checkpoint without widening the
+// shared protocol boundary. Empty mode retains the legacy synthetic default.
+func OpenDriverWithMode(cfg ap.Config, mode string, saved []byte) (*Driver, uint64, error) {
+	if mode == "" {
+		mode = SyntheticNotice
+	}
+	if mode != SyntheticNotice && mode != WorkReference {
+		return nil, 0, errors.New("unsupported_notice_mode")
+	}
 	if cfg.NativeRelease != ObservedRelease || !Descriptor().SupportsLifecycle(cfg) || cfg.NativeSession != "" {
 		return nil, 0, ap.ErrUnsupported
 	}
 	c := Config{Provider: cfg.Selection.Provider, Model: cfg.Selection.Model, Effort: cfg.Selection.Effort, Workspace: cfg.Workspace}
+	if mode == WorkReference {
+		c.NoticeMode = WorkReference
+	}
 	if len(saved) == 0 {
 		s, err := NewStream(c)
 		if err != nil {
 			return nil, 0, err
 		}
-		return &Driver{stream: s}, 0, nil
+		return &Driver{stream: s, noticeMode: mode}, 0, nil
 	}
 	if len(saved) > ap.MaxCheckpoint || !json.Valid(saved) || !uniqueKeys(saved) {
 		return nil, 0, errors.New("driver_checkpoint_refused")
 	}
-	if _, ok := requiredFields(saved, "version", "stream", "input_id", "accepted", "completed", "begun"); !ok {
+	fields := []string{"version", "stream", "input_id", "accepted", "completed", "begun"}
+	if mode == WorkReference {
+		fields = append(fields, "notice_mode")
+	}
+	if _, ok := requiredFields(saved, fields...); !ok {
 		return nil, 0, errors.New("driver_checkpoint_refused")
 	}
 	var r driverRecord
 	decoder := json.NewDecoder(bytes.NewReader(saved))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&r) != nil || r.Version != 1 {
+	if decoder.Decode(&r) != nil || !((r.Version == 1 && r.NoticeMode == "" && mode == SyntheticNotice) || (r.Version == 2 && r.NoticeMode == WorkReference && mode == WorkReference)) {
 		return nil, 0, errors.New("driver_checkpoint_refused")
 	}
 	for _, v := range []string{r.InputID, r.Accepted, r.Completed} {
@@ -80,7 +109,7 @@ func OpenDriver(cfg ap.Config, saved []byte) (*Driver, uint64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	return &Driver{stream: s, inputID: r.InputID, accepted: r.Accepted, completed: r.Completed, begun: r.Begun, restored: true}, offset, nil
+	return &Driver{stream: s, inputID: r.InputID, accepted: r.Accepted, completed: r.Completed, begun: r.Begun, restored: true, noticeMode: mode}, offset, nil
 }
 
 func (d *Driver) checkpoint() ([]byte, error) {
@@ -88,7 +117,12 @@ func (d *Driver) checkpoint() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(driverRecord{Version: 1, Stream: b, InputID: d.inputID, Accepted: d.accepted, Completed: d.completed, Begun: d.begun})
+	r := driverRecord{Version: 1, Stream: b, InputID: d.inputID, Accepted: d.accepted, Completed: d.completed, Begun: d.begun}
+	if d.noticeMode == WorkReference {
+		r.Version = 2
+		r.NoticeMode = WorkReference
+	}
+	return json.Marshal(r)
 }
 
 func (d *Driver) snapshot() ap.Transition {
@@ -158,7 +192,7 @@ func (d *Driver) Prepare(in ap.Input) (ap.Transition, error) {
 	if !Descriptor().Capabilities.Supports(in.Mode) {
 		return d.snapshot(), ap.ErrUnsupported
 	}
-	if !identifier(in.ID) || !identifier(in.Reference) || in.ExpectedTurn != "" {
+	if !identifier(in.ID) || !identifier(in.Reference) || in.ExpectedTurn != "" || (d.noticeMode == WorkReference && !validWorkReference(in.Reference)) {
 		return d.snapshot(), errors.New("invalid_notice_framing")
 	}
 	if in.ID == d.inputID {
@@ -167,7 +201,11 @@ func (d *Driver) Prepare(in ap.Input) (ap.Transition, error) {
 	if d.snapshot().View.Activity != ap.Idle {
 		return d.snapshot(), errors.New("driver_input_closed")
 	}
-	w, err := d.stream.Submit("Notice reference: " + in.Reference + ". For this synthetic notice, reply ok without tools.")
+	text := "Notice reference: " + in.Reference + ". For this synthetic notice, reply ok without tools."
+	if d.noticeMode == WorkReference {
+		text = "Work reference: " + in.Reference + ". Resolve this admitted task reference using this workspace's existing workflow. Perform only its authorized work and record the required output. If the reference is missing, ambiguous or outside the admitted scope, stop and report the constraint. This notice grants no additional permission."
+	}
+	w, err := d.stream.Submit(text)
 	if err != nil {
 		return d.snapshot(), err
 	}
@@ -175,6 +213,18 @@ func (d *Driver) Prepare(in ap.Input) (ap.Transition, error) {
 	d.accepted = ""
 	d.completed = ""
 	return d.finish([]ap.Action{action(w, in.ID)}, nil)
+}
+
+func validWorkReference(v string) bool {
+	if !identifier(v) {
+		return false
+	}
+	for _, r := range v {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == ':' || r == '/' || r == '@' || r == '+' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *Driver) Observe(chunk ap.Chunk) (ap.Transition, error) {

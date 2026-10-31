@@ -73,7 +73,9 @@ func (s *store) read() (State, bool, error) {
 	if err := localipc.Decode(file, &state); err != nil {
 		return State{}, false, errors.New("state_corrupt")
 	}
-	if !((state.Version == 1 && state.Admission == nil) || (state.Version == 2 && state.Admission != nil && admission.Valid(*state.Admission))) || !validInputState(state.InputState) || (state.InputState == InputSecurityStop && !state.SecurityStopped) || state.Execution == "" || state.Epoch == 0 || len(state.Records) > MaxRecords ||
+	legacy := state.NoticeMode == "" && ((state.Version == 1 && state.Admission == nil) || (state.Version == 2 && state.Admission != nil && admission.Valid(*state.Admission)))
+	work := state.Version == 3 && state.NoticeMode == WorkReference && state.Admission == nil && state.Protocol != nil
+	if !(legacy || work) || !validInputState(state.InputState) || (state.InputState == InputSecurityStop && !state.SecurityStopped) || state.Execution == "" || state.Epoch == 0 || len(state.Records) > MaxRecords ||
 		(state.Fence != "open" && state.Fence != "held" && state.Fence != "unknown") {
 		return State{}, false, errors.New("state_corrupt")
 	}
@@ -81,7 +83,7 @@ func (s *store) read() (State, bool, error) {
 	var maxSequence uint64
 	for _, record := range state.Records {
 		if !validNotice(record.Notice) || seen[record.Notice.ID] || record.Sequence != maxSequence+1 ||
-			(record.State != "queued" && record.State != "unknown" && record.State != "applied") || record.Digest != digestNotice(record.Notice, state.Selection) {
+			(record.State != "queued" && record.State != "unknown" && record.State != "applied") || record.Digest != digestNoticeMode(record.Notice, state.Selection, state.NoticeMode) {
 			return State{}, false, errors.New("state_corrupt")
 		}
 		seen[record.Notice.ID] = true

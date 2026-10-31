@@ -33,7 +33,20 @@ func (d securityProtocol) Observe(c ap.Chunk) (ap.Transition, error) {
 // actual host journal. Later idle, explicit release and replacement cannot clear
 // it or dispatch queued input. Live-output tests supply the unlatched control.
 func TestProtocolSecurityStopLatch(t *testing.T) {
-	cfg, _, _ := setupProtocol(t, "normal")
+	for _, mode := range []string{sessionhost.SyntheticNotice, sessionhost.WorkReference} {
+		t.Run(mode, func(t *testing.T) { protocolSecurityStopLatch(t, mode) })
+	}
+}
+
+func (d securityProtocol) NoticeMode() string {
+	if configured, ok := d.Driver.(interface{ NoticeMode() string }); ok {
+		return configured.NoticeMode()
+	}
+	return sessionhost.SyntheticNotice
+}
+
+func protocolSecurityStopLatch(t *testing.T, mode string) {
+	cfg, _, _ := setupProtocolNoticeMode(t, "normal", mode)
 	factory := cfg.ProtocolFactory
 	stopped := new(atomic.Bool)
 	cfg.ProtocolFactory = func(cp []byte) (ap.Driver, uint64, error) {

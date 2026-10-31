@@ -19,6 +19,18 @@ import (
 
 const MaxRecords = 32
 
+const (
+	SyntheticNotice = "synthetic"
+	WorkReference   = "work-reference"
+)
+
+func noticeMode(mode string) string {
+	if mode == "" {
+		return SyntheticNotice
+	}
+	return mode
+}
+
 var scalar = regexp.MustCompile(`^[A-Za-z0-9._:/@+\-]{1,128}$`)
 
 // Selection is opaque data, not a model catalog or launch admission decision.
@@ -79,6 +91,7 @@ type Record struct {
 
 type State struct {
 	Version         int                 `json:"version"`
+	NoticeMode      string              `json:"notice_mode,omitempty"`
 	Admission       *admission.Snapshot `json:"admission,omitempty"`
 	Execution       string              `json:"execution"`
 	RunnerInstance  string              `json:"runner_instance"`
@@ -96,7 +109,9 @@ type State struct {
 
 type Config struct {
 	// Admission is an opt-in internal synthetic proof seam, not a hosted launcher.
-	Admission       *admission.Config
+	Admission *admission.Config
+	// NoticeMode is immutable for an execution. Empty preserves synthetic notices.
+	NoticeMode      string
 	StateDir        string
 	Socket          string
 	Execution       string
@@ -134,10 +149,21 @@ func validSelection(s Selection) bool {
 }
 
 func digestNotice(n Notice, s Selection) string {
+	return digestNoticeMode(n, s, SyntheticNotice)
+}
+
+func digestNoticeMode(n Notice, s Selection, mode string) string {
 	data, _ := json.Marshal(struct {
 		Notice    Notice
 		Selection Selection
 	}{n, s})
+	if noticeMode(mode) == WorkReference {
+		data, _ = json.Marshal(struct {
+			Mode      string
+			Notice    Notice
+			Selection Selection
+		}{WorkReference, n, s})
+	}
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
 }
@@ -145,6 +171,10 @@ func digestNotice(n Notice, s Selection) string {
 func Open(cfg Config) (*Host, error) {
 	name := cfg.ProtocolName
 	protocol := cfg.ProtocolFactory != nil
+	mode := noticeMode(cfg.NoticeMode)
+	if (mode != SyntheticNotice && mode != WorkReference) || (mode == WorkReference && (!protocol || cfg.Admission != nil)) {
+		return nil, errors.New("unsupported_notice_mode")
+	}
 	if !protocol && cfg.Adapter != nil {
 		name = cfg.Adapter.Name()
 	}
@@ -168,12 +198,16 @@ func Open(cfg Config) (*Host, error) {
 		store.close()
 		return nil, err
 	}
-	if exists && (state.Execution != cfg.Execution || state.Adapter != name || state.Selection != cfg.Selection || (state.Protocol != nil) != protocol) {
+	if exists && (noticeMode(state.NoticeMode) != mode || state.Execution != cfg.Execution || state.Adapter != name || state.Selection != cfg.Selection || (state.Protocol != nil) != protocol) {
 		store.close()
 		return nil, errors.New("stored_plan_conflict")
 	}
 	if !exists {
 		state = State{Version: 1, Execution: cfg.Execution, Adapter: name, Selection: cfg.Selection, Fence: "held", InputState: InputUnknown}
+		if mode == WorkReference {
+			state.Version = 3
+			state.NoticeMode = WorkReference
+		}
 	}
 	if exists && ((state.Admission != nil) != (cfg.Admission != nil) || (state.Admission != nil && state.Admission.Failed)) {
 		store.close()
@@ -196,6 +230,13 @@ func Open(cfg Config) (*Host, error) {
 		if err != nil || driver == nil || driver.Descriptor().Name != name || ap.Validate(driver.Descriptor(), driver.Snapshot()) != nil || outputOffset > runner.MaxOutput {
 			store.close()
 			return nil, errors.New("protocol_restore_refused")
+		}
+		// Work-reference factories must attest the same immutable rendering mode.
+		// Legacy factories without this opt-in remain synthetic only.
+		configured, declared := driver.(interface{ NoticeMode() string })
+		if (declared && noticeMode(configured.NoticeMode()) != mode) || (!declared && mode == WorkReference) {
+			store.close()
+			return nil, errors.New("protocol_notice_mode_conflict")
 		}
 		if state.Protocol == nil {
 			state.Protocol = &ProtocolState{BoundaryVersion: ap.Version, ObservedRelease: driver.Descriptor().ObservedRelease, Checkpoint: driver.Snapshot().Checkpoint, View: driver.Snapshot().View}
@@ -373,7 +414,7 @@ func (h *Host) Enqueue(notice Notice) (Record, error) {
 	if h.ctx.Err() != nil || h.err != nil {
 		return Record{}, errors.New("host_unavailable")
 	}
-	digest := digestNotice(notice, h.state.Selection)
+	digest := digestNoticeMode(notice, h.state.Selection, h.state.NoticeMode)
 	for _, record := range h.state.Records {
 		if record.Notice.ID == notice.ID {
 			if record.Digest != digest {
