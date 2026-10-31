@@ -26,6 +26,17 @@ interactive launch alone does not establish app-server thread permissions.
 The current manual Codex path calls no managed home-lease/observer APIs; the
 synthetic admission seam is not a substitute for production admission.
 
+Select cooperative stop explicitly when preparing that runner:
+
+```sh
+.temp/prototype/bin/swarma-session-runner \
+  --socket "$RUNNER_SOCKET" --execution "$EXECUTION" \
+  --io-timeout 5s --stop-signal term < admitted-plan.json
+```
+
+The plan must name the admitted Curator route. This command is an interface
+example, not evidence that a particular installed wrapper forwards termination.
+
 With that runner already admitted and running, use absolute private socket and
 state paths and the exact admitted selections below. These are shell variables
 for nonsecret deployment values, not credentials:
@@ -37,10 +48,10 @@ for nonsecret deployment values, not credentials:
   --codex-policy yolo \
   --workspace "$WORKSPACE" --native-release 0.164.0 \
   --vendor "$VENDOR" --model "$MODEL" --reasoning "$EFFORT" \
-  --io-timeout 5s --poll-interval 25ms
+  --io-timeout 20s --poll-interval 25ms
 
 .temp/prototype/bin/swarma-session-host request \
-  --socket "$HOST_SOCKET" --timeout 2s < request.json
+  --socket "$HOST_SOCKET" --timeout 25s < request.json
 ```
 
 Status is `{"op":"status"}`. Read its actual execution and controller epoch;
@@ -116,10 +127,27 @@ still consumes retained runner capacity even though checkpoint metadata omits
 it. Exhaustion closes input; output is not rotated. This mode is not an unattended
 service, automatic launcher enrollment or process-tree confinement.
 
-The current runner closes its original child's stdin, waits, and may kill/reap
-only that unreaped direct child. Its `stopped` receipt does not establish native
-descendant absence when wrappers spawn separate processes. Qualify the actual
-owned wrapper/native stop route before relying on it for real use.
+The runner defaults to `--stop-signal none`, retaining EOF-driven direct-child
+stop. Opt-in `--stop-signal term` closes stdin and sends TERM once to its
+original still-owned, unreaped child, serialized with the original reaper.
+Unknown selectors refuse before binding a socket or spawning a child. The
+runner never discovers, adopts or signals a process group or another handle.
+
+Cooperative stop shares one attempt across concurrent requests and retries.
+It waits up to one runner I/O timeout for cooperative completion, then may
+force only the original unreaped child and wait another timeout for reap.
+Output drain has one further timeout. Required-signal failure, cooperative
+expiry, uncertain wait or drain expiry returns `stop_unknown`, retained across
+retries even if forced direct-child reap succeeds. With the explicit 5s runner
+timeout above, phase waits total at most 15s; the 20s host RPC and 25s request
+timeouts provide margins. Deployment admission must also account for cleanup
+and the complete execution window; these durations do not create an admission.
+
+Even cooperative `stopped` proves only original direct-child completion. It
+does not establish native descendant absence when wrappers spawn separate
+processes. Qualify forwarding and original-child reap in the actual installed
+wrapper, and native-group cleanup through the route that owns that group,
+before relying on it for real use.
 
 For rollback, close further input and preserve the prior verified binary and
 private journal, including queued/unknown receipts. Stop only the admitted owned
@@ -133,12 +161,15 @@ Run on macOS with the repository's Go toolchain and cgo support:
 
 ```sh
 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 \
-  ./internal/codexadapter ./internal/sessionhost
+  ./internal/runner ./internal/codexadapter ./internal/sessionhost
 ```
 
 Tests cover default rendering, explicit work rendering, separate policy admission
 and transport, missing/conflicting policy echoes, mode/checkpoint/digest
 refusals, same-mode replacement, exact retries, stale epochs, hold/busy/security
 stop, uncertain-write recovery, output termination and visible tool refusal.
+Runner fixtures exercise real TERM delivery to an inert child, concurrent stop
+and retry, forced-reap uncertainty, signal authority guards, required-signal
+failure, drain expiry and invalid-selector refusal with valid controls.
 These use inert owned fixtures. Actual first-use evidence remains a separate
 native qualification and artifact inspection.

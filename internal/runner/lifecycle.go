@@ -2,6 +2,7 @@ package runner
 
 import (
 	"errors"
+	"os"
 	"syscall"
 )
 
@@ -66,6 +67,24 @@ func classifyChildWait(ownedPID, resultPID int, err error) (childOwnership, bool
 func (s *Server) ownsChildLocked() bool {
 	return s.childState == childOwned && s.child != nil && s.pid > 0 &&
 		s.child.Pid == s.pid && s.original.pid == s.pid
+}
+
+// Delivery is per call so inert qualification can inspect the authority seam
+// without constructing an OS signal target. Production always uses Process.Signal.
+type childSignaler func(*os.Process, os.Signal) error
+
+func (s *Server) signalOriginalChild(signal os.Signal, deliver childSignaler) (bool, error) {
+	s.processMu.Lock()
+	defer s.processMu.Unlock()
+	s.mu.Lock()
+	owned := s.ownsChildLocked() && !s.exited && !s.waitUnknown
+	s.mu.Unlock()
+	if !owned {
+		return false, nil
+	}
+	// Reap cannot consume this child's wait status while processMu is held.
+	// No PID lookup, adoption, process group or replacement handle is used.
+	return true, deliver(s.child, signal)
 }
 
 // publishChildWaitLocked requires processMu then mu and a terminal wait result.
