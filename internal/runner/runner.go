@@ -34,10 +34,11 @@ type Plan struct {
 }
 
 type Config struct {
-	Socket    string
-	Execution string
-	Plan      Plan
-	IOTimeout time.Duration
+	Socket     string
+	Execution  string
+	Plan       Plan
+	IOTimeout  time.Duration
+	StopSignal string
 }
 
 type Request struct {
@@ -110,6 +111,9 @@ type Server struct {
 	waitUnknown bool
 	exitCode    int
 
+	cooperativeStopOnce sync.Once
+	cooperativeStopCode string
+
 	identifySlots       chan struct{}
 	identifyBeforeReply func() // guarded by mu; qualification barrier, nil in production
 }
@@ -134,7 +138,8 @@ func startWithChildLifecycle(cfg Config, capture func(int) (childBirth, error), 
 // ordinary start always passes nil and ownership/reap semantics stay unchanged.
 func startWithReaperGate(cfg Config, capture func(int) (childBirth, error), wait childWaiter, beforeReap func()) (*Server, error) {
 	if cfg.Execution == "" || len(cfg.Execution) > 128 || cfg.IOTimeout <= 0 || cfg.IOTimeout > time.Minute ||
-		!filepath.IsAbs(cfg.Plan.Binary) || !filepath.IsAbs(cfg.Plan.Cwd) || cfg.Plan.Env == nil || len(cfg.Plan.Args) > 32 {
+		!filepath.IsAbs(cfg.Plan.Binary) || !filepath.IsAbs(cfg.Plan.Cwd) || cfg.Plan.Env == nil || len(cfg.Plan.Args) > 32 ||
+		(cfg.StopSignal != "" && cfg.StopSignal != "none" && cfg.StopSignal != "term") {
 		return nil, errors.New("invalid_runner_plan")
 	}
 	// Bind before child creation: an occupied endpoint must have no spawn effect.
@@ -540,6 +545,21 @@ func (s *Server) read(req Request) Response {
 }
 
 func (s *Server) stop() Response {
+	if s.cfg.StopSignal != "term" {
+		return s.stopDirect()
+	}
+	// One attempt owns all three phase budgets. Concurrent calls join it;
+	// retries cannot restart grace or turn a forced cutoff into success.
+	s.cooperativeStopOnce.Do(func() {
+		s.cooperativeStopCode = s.stopCooperatively((*os.Process).Signal)
+	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.snapshotLocked(s.cooperativeStopCode)
+}
+
+// The legacy path deliberately retains its EOF/forced-direct-child semantics.
+func (s *Server) stopDirect() Response {
 	s.stdin.Close()
 	timer := time.NewTimer(s.cfg.IOTimeout)
 	defer timer.Stop()
@@ -591,7 +611,14 @@ func (s *Server) Close() error {
 		if result := s.stop(); result.Code != "stopped" {
 			s.stdout.Close()
 			s.closeErr = errors.New("runner_stop_unknown")
-			return
+			// A cooperative deadline remains unknown after forced root reap,
+			// but its completed reaper and closed transports still need joining.
+			// Never wait indefinitely for a child whose wait is unresolved.
+			select {
+			case <-s.done:
+			default:
+				return
+			}
 		}
 		s.wg.Wait()
 	})

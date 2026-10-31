@@ -18,6 +18,7 @@ func main() {
 	flag.StringVar(&cfg.Socket, "socket", "", "absolute private runner socket")
 	flag.StringVar(&cfg.Execution, "execution", "", "explicit fixture execution identifier")
 	flag.DurationVar(&cfg.IOTimeout, "io-timeout", 0, "explicit bounded I/O timeout")
+	flag.StringVar(&cfg.StopSignal, "stop-signal", "none", "owned-child stop signal: none or term; stopped proves only direct-child completion")
 	flag.Parse()
 	if flag.NArg() != 0 || localipc.Decode(os.Stdin, &cfg.Plan) != nil {
 		fmt.Fprintln(os.Stderr, "invalid_fixture_plan")

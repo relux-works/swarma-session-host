@@ -35,6 +35,12 @@ Its unexported qualification client has no command caller. External verifier
 integration and hosted-admission qualification remain pending; ownership does
 not establish current liveness.
 
+The runner also offers opt-in `--stop-signal term` for cooperative stop of its
+original child, with bounded grace/reap/drain phases and retained uncertainty.
+The default `none` retains EOF-driven stop. Both receipts concern only the
+direct child; [work-reference deployment](docs/work-reference.md) still requires
+qualification of the actual wrapper and native cleanup route.
+
 The next slices qualify hosted launch through Curator and the launcher, followed
 by Claude Code, Muse and Linux. Hosted launch integration needs
 the jointly accepted model-configuration and plan/process-proof contracts. The
@@ -74,13 +80,14 @@ accounts or shared services are accessed.
 | Go 1.25.5 | `go build -p 1 -o .temp/prototype/bin/ ./cmd/...`; `go vet -p 1 ./...`; `go test -p 1 -race -count=1 ./...` | Binaries in `.temp/prototype/bin/`; test results on stdout |
 | gofmt | `gofmt -l cmd internal` | Paths requiring formatting on stdout |
 | Python 3 | `python3 .scripts/prototype-smoke.py --bin-dir .temp/prototype/bin --report-dir .temp/prototype/evidence` | Per-lane reports and fixture logs in the explicit report directory |
-| swarma-session-runner | `.temp/prototype/bin/swarma-session-runner -socket PATH -execution ID -io-timeout 1s < plan.json` | Own child/stdin/stdout and a private control socket; bounded metadata on stdout |
+| swarma-session-runner | `.temp/prototype/bin/swarma-session-runner -socket PATH -execution ID -io-timeout 1s -stop-signal none < plan.json`; opt-in `-stop-signal term` | Own child/stdin/stdout and a private control socket; bounded direct-child metadata on stdout |
 | swarma-session-host | `.temp/prototype/bin/swarma-session-host serve ...`; `request -socket PATH -timeout 2s < request.json` | Private state snapshots and bounded JSON responses; [fixture flags](docs/prototype-m1.md#commands), [opt-in work-reference flags](docs/work-reference.md) |
 | session-fixture | `.temp/prototype/bin/session-fixture -protocol json` or `-protocol line` | Synthetic acknowledgements on stdout |
 | Codex 0.164.0 app-server | Through an admitted launch plan: `app-server --listen stdio://`; [host adapter flags](docs/prototype-m2.md#commands-and-verification) | Native stdio consumed in memory; bounded metadata/checkpoints in the private host state directory |
 | Curator | `curator run codex_cli --native --profile PROFILE --model MODEL --effort EFFORT --permissions native -- app-server --listen stdio://` for an admitted disposable protocol test | Profile-managed environment and credential custody; no credential values or native transcripts in host artifacts |
 | macOS process identity | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -run TestOwnedKernelIdentity ./internal/admission` | Test output; reads only the owned test process in this check; no persisted native process inventory |
 | macOS child birth | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -run 'TestOriginal|TestChildWait|TestChildReap|TestChildClosed' ./internal/runner` | Owned-child lifecycle and kernel controls on stdout; no native session |
+| Cooperative stop fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestCooperativeStop|TestOriginalChildSignalGuards|TestForcedStopAndReapedHandle' ./internal/runner` | Inert owned-child TERM, legacy EOF, retry, cutoff and signal-guard evidence on stdout; no native cleanup claim |
 | Runner identify qualification | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -p 1 -run 'TestIdentify|TestPeerIdentity' ./internal/runner ./internal/localipc` | Strict wire, owned sockets, lifecycle/non-effect and post-reply ordering fixtures on stdout; external readers remain unqualified |
 | macOS ps | `/bin/ps -p PID -o stat=` in `TestOwnedKernelChildLifecycle` | Non-reaping state observation of the explicitly owned child; no process discovery |
 | Git | `git rev-parse HEAD`; `git log --show-signature -1` | Revision and signature evidence on stdout |
