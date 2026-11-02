@@ -7,6 +7,9 @@ model and reasoning selections are opaque strings, with no model catalog in
 host core.
 
 **Current scope: M2 Codex protocol prototype and M3-S synthetic admission.**
+A separate, inert `curator-host-notification/1` codec validates bounded notification
+requests and correlated responses. It provides no broker attachment, enrollment,
+durable acceptance or native delivery yet.
 A bounded Codex 0.164.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted
@@ -94,6 +97,7 @@ accounts or shared services are accessed.
 | macOS process identity | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -run TestOwnedKernelIdentity ./internal/admission` | Test output; reads only the owned test process in this check; no persisted native process inventory |
 | macOS child birth | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -run 'TestOriginal|TestChildWait|TestChildReap|TestChildClosed' ./internal/runner` | Owned-child lifecycle and kernel controls on stdout; no native session |
 | Output consumption fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestConsume|TestProtocolConsume' ./internal/runner ./internal/sessionhost` | Inert child backpressure, absolute offsets, durable consumption, reply-loss and replacement evidence on stdout |
+| Notification codec fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestNotification' ./internal/sessionhost` | Closed wire, bounded framing, correlation and rejection controls on stdout; no native execution |
 | Cooperative stop fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestCooperativeStop|TestOriginalChildSignalGuards|TestForcedStopAndReapedHandle' ./internal/runner` | Inert owned-child TERM, legacy EOF, retry, cutoff and signal-guard evidence on stdout; no native cleanup claim |
 | Runner identify qualification | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -p 1 -run 'TestIdentify|TestPeerIdentity' ./internal/runner ./internal/localipc` | Strict wire, owned sockets, lifecycle/non-effect and post-reply ordering fixtures on stdout; external readers remain unqualified |
 | macOS ps | `/bin/ps -p PID -o stat=` in `TestOwnedKernelChildLifecycle` | Non-reaping state observation of the explicitly owned child; no process discovery |
