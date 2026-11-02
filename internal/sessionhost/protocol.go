@@ -43,6 +43,11 @@ func wireDigest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToStr
 
 func cloneState(s State) State {
 	s.Records = slices.Clone(s.Records)
+	if s.Notification != nil {
+		j := *s.Notification
+		j.Attempts = slices.Clone(j.Attempts)
+		s.Notification = &j
+	}
 	if s.Admission != nil {
 		a := *s.Admission
 		s.Admission = &a
@@ -74,7 +79,7 @@ func validProtocolState(s State) bool {
 		return true
 	}
 	p := s.Protocol
-	if p != nil && p.Refusal != "" && (p.Refusal != "adapter_observation_refused" || s.Version != 3 || s.NoticeMode != WorkReference) {
+	if p != nil && p.Refusal != "" && (p.Refusal != "adapter_observation_refused" || (s.Version != 3 && s.Version != notificationStateVersion) || s.NoticeMode != WorkReference) {
 		return false
 	}
 	if p.BoundaryVersion != ap.Version || p.ObservedRelease == "" {
@@ -300,6 +305,10 @@ func (h *Host) reconcileOutbox() bool {
 			h.mu.Unlock()
 			return false
 		}
+		if !recovering && notificationOwnsRecord(h.state, a.InputID) && !h.notificationCurrentLocked() {
+			h.mu.Unlock()
+			return false
+		}
 		h.mu.Unlock()
 		req := runner.Request{Op: "write", Execution: h.cfg.Execution, Epoch: epoch, Sequence: a.Sequence, Data: a.Data}
 		if recovering {
@@ -443,6 +452,9 @@ func (h *Host) prepareProtocol() bool {
 		}
 	}
 	if i < 0 {
+		return false
+	}
+	if notificationOwnsRecord(h.state, h.state.Records[i].Notice.ID) && !h.notificationCurrentLocked() {
 		return false
 	}
 	next := cloneState(h.state)

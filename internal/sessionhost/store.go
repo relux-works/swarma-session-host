@@ -74,8 +74,8 @@ func (s *store) read() (State, bool, error) {
 		return State{}, false, errors.New("state_corrupt")
 	}
 	legacy := state.NoticeMode == "" && ((state.Version == 1 && state.Admission == nil) || (state.Version == 2 && state.Admission != nil && admission.Valid(*state.Admission)))
-	work := state.Version == 3 && state.NoticeMode == WorkReference && state.Admission == nil && state.Protocol != nil
-	if !(legacy || work) || !validInputState(state.InputState) || (state.InputState == InputSecurityStop && !state.SecurityStopped) || state.Execution == "" || state.Epoch == 0 || len(state.Records) > MaxRecords ||
+	work := (state.Version == 3 || state.Version == notificationStateVersion) && state.NoticeMode == WorkReference && state.Admission == nil && state.Protocol != nil
+	if !(legacy || work) || !validNotificationState(state) || !validInputState(state.InputState) || (state.InputState == InputSecurityStop && !state.SecurityStopped) || state.Execution == "" || state.Epoch == 0 || len(state.Records) > MaxRecords ||
 		(state.Fence != "open" && state.Fence != "held" && state.Fence != "unknown") {
 		return State{}, false, errors.New("state_corrupt")
 	}

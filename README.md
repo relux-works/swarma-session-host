@@ -7,9 +7,13 @@ model and reasoning selections are opaque strings, with no model catalog in
 host core.
 
 **Current scope: M2 Codex protocol prototype and M3-S synthetic admission.**
-A separate, inert `curator-host-notification/1` codec validates bounded notification
-requests and correlated responses. It provides no broker attachment, enrollment,
-durable acceptance or native delivery yet.
+A separate `curator-host-notification/1` codec validates bounded notification
+requests and correlated responses. Private Host-core primitives persist matching
+notification intents and exact retry correlation in state version 4, with count,
+byte and input gates. Persisted correlation grants no attachment authority;
+replacement keeps delivery fenced pending explicit renewed admission. These
+primitives have no CLI or transport caller. Broker attachment, enrollment and
+live notification delivery remain unimplemented.
 A bounded Codex 0.164.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted

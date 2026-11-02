@@ -90,21 +90,22 @@ type Record struct {
 }
 
 type State struct {
-	Version         int                 `json:"version"`
-	NoticeMode      string              `json:"notice_mode,omitempty"`
-	Admission       *admission.Snapshot `json:"admission,omitempty"`
-	Execution       string              `json:"execution"`
-	RunnerInstance  string              `json:"runner_instance"`
-	Adapter         string              `json:"adapter"`
-	Selection       Selection           `json:"selection"`
-	Epoch           uint64              `json:"epoch"`
-	Sequence        uint64              `json:"sequence"`
-	Fence           string              `json:"fence"`
-	Records         []Record            `json:"records"`
-	StopRequested   bool                `json:"stop_requested"`
-	InputState      InputState          `json:"input_state"`
-	SecurityStopped bool                `json:"security_stopped"`
-	Protocol        *ProtocolState      `json:"protocol,omitempty"`
+	Version         int                  `json:"version"`
+	NoticeMode      string               `json:"notice_mode,omitempty"`
+	Admission       *admission.Snapshot  `json:"admission,omitempty"`
+	Execution       string               `json:"execution"`
+	RunnerInstance  string               `json:"runner_instance"`
+	Adapter         string               `json:"adapter"`
+	Selection       Selection            `json:"selection"`
+	Epoch           uint64               `json:"epoch"`
+	Sequence        uint64               `json:"sequence"`
+	Fence           string               `json:"fence"`
+	Records         []Record             `json:"records"`
+	StopRequested   bool                 `json:"stop_requested"`
+	InputState      InputState           `json:"input_state"`
+	SecurityStopped bool                 `json:"security_stopped"`
+	Protocol        *ProtocolState       `json:"protocol,omitempty"`
+	Notification    *notificationJournal `json:"notification,omitempty"`
 }
 
 type Config struct {
@@ -126,24 +127,26 @@ type Config struct {
 }
 
 type Host struct {
-	cfg              Config
-	store            *store
-	client           *runner.Client
-	mu               sync.Mutex
-	state            State
-	err              error
-	ctx              context.Context
-	cancel           context.CancelFunc
-	kick             chan struct{}
-	wg               sync.WaitGroup
-	closeOnce        sync.Once
-	driver           ap.Driver
-	outputOffset     uint64
-	runnerReadOffset uint64
-	consumedOffset   uint64
-	recovering       bool
-	protocolFailed   bool
-	writeBlocked     bool
+	cfg                 Config
+	store               *store
+	client              *runner.Client
+	mu                  sync.Mutex
+	state               State
+	err                 error
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	kick                chan struct{}
+	wg                  sync.WaitGroup
+	closeOnce           sync.Once
+	driver              ap.Driver
+	outputOffset        uint64
+	runnerReadOffset    uint64
+	consumedOffset      uint64
+	recovering          bool
+	protocolFailed      bool
+	writeBlocked        bool
+	notificationBinding *NotificationBinding
+	notificationClosed  bool
 }
 
 func validNotice(n Notice) bool { return scalar.MatchString(n.ID) && scalar.MatchString(n.Reference) }
@@ -343,6 +346,11 @@ func Open(cfg Config) (*Host, error) {
 	}
 	if state.StopRequested {
 		state.Fence = "held"
+	}
+	if state.Notification != nil {
+		// Restoring correlation is never renewed attachment authority. In this
+		// finite version a changed epoch requires a separately admitted handover.
+		state.Fence = "unknown"
 	}
 	if err := store.write(state); err != nil {
 		client.Close()
