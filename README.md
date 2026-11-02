@@ -12,8 +12,13 @@ requests and correlated responses. Private Host-core primitives persist matching
 notification intents and exact retry correlation in state version 4, with count,
 byte and input gates. Persisted correlation grants no attachment authority;
 replacement keeps delivery fenced pending explicit renewed admission. These
-primitives have no CLI or transport caller. Broker attachment, enrollment and
-live notification delivery remain unimplemented.
+primitives feed a private service over one supplied Unix stream. It serializes
+strict frames, requires an explicit 1..60000ms call budget, closes on loss and
+rejects a second attachment in the same Host lifecycle. Idle waiting consumes
+no call budget; expiry or a lost response retains any accepted intent as an
+unresolved obligation. The service has no public activation or CLI caller.
+Broker enrollment, inherited endpoint custody and live notification delivery
+remain unimplemented.
 A bounded Codex 0.164.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted
@@ -102,6 +107,7 @@ accounts or shared services are accessed.
 | macOS child birth | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -run 'TestOriginal|TestChildWait|TestChildReap|TestChildClosed' ./internal/runner` | Owned-child lifecycle and kernel controls on stdout; no native session |
 | Output consumption fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestConsume|TestProtocolConsume' ./internal/runner ./internal/sessionhost` | Inert child backpressure, absolute offsets, durable consumption, reply-loss and replacement evidence on stdout |
 | Notification codec fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestNotification' ./internal/sessionhost` | Closed wire, bounded framing, correlation and rejection controls on stdout; no native execution |
+| Notification stream fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestNotificationStream' ./internal/sessionhost` | Owned inert Unix socketpairs: serial calls, idle versus call expiry, framing rejection, retained intent and single-attachment controls; no enrollment or native runtime |
 | Cooperative stop fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestCooperativeStop|TestOriginalChildSignalGuards|TestForcedStopAndReapedHandle' ./internal/runner` | Inert owned-child TERM, legacy EOF, retry, cutoff and signal-guard evidence on stdout; no native cleanup claim |
 | Runner identify qualification | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -p 1 -run 'TestIdentify|TestPeerIdentity' ./internal/runner ./internal/localipc` | Strict wire, owned sockets, lifecycle/non-effect and post-reply ordering fixtures on stdout; external readers remain unqualified |
 | macOS ps | `/bin/ps -p PID -o stat=` in `TestOwnedKernelChildLifecycle` | Non-reaping state observation of the explicitly owned child; no process discovery |

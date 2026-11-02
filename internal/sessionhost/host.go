@@ -147,6 +147,7 @@ type Host struct {
 	writeBlocked        bool
 	notificationBinding *NotificationBinding
 	notificationClosed  bool
+	notificationStream  *notificationAttachment
 }
 
 func validNotice(n Notice) bool { return scalar.MatchString(n.ID) && scalar.MatchString(n.Reference) }
@@ -653,6 +654,10 @@ func (h *Host) Stop(ctx context.Context) (runner.Response, error) {
 func (h *Host) Close() error {
 	h.closeOnce.Do(func() {
 		h.cancel()
+		// Pair with notification service admission under mu: after cancellation
+		// and this barrier no service can add to wg behind the join.
+		h.mu.Lock()
+		h.mu.Unlock()
 		h.wg.Wait()
 		ctx, cancel := context.WithTimeout(context.Background(), h.cfg.IOTimeout)
 		h.client.Call(ctx, runner.Request{Op: "release", Execution: h.cfg.Execution, Epoch: h.state.Epoch})

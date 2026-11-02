@@ -166,8 +166,8 @@ func notificationAttempt(r Record, b NotificationBinding) (*NotificationAttempt,
 		Sequence: strconv.FormatUint(r.Sequence, 10), Custody: "host-accepted", NativeStage: stage}, true
 }
 
-// notificationRequest has no transport caller yet. It serializes the complete
-// admission check and intent with the same lock/store as the existing scheduler.
+// notificationRequest serializes the complete admission check and intent with
+// the same lock/store as the existing scheduler.
 // Native submission remains the existing work-reference path, never a second
 // worker, prompt renderer or direct write from this method.
 func (h *Host) notificationRequest(q NotificationRequest) (NotificationResponse, error) {
