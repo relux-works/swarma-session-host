@@ -833,7 +833,8 @@ func TestOfflineHostCorpus(t *testing.T) {
 				}
 				if tc.E != 0 {
 					offlineAwait(t, "actual EOF after oversized frame", func() bool {
-						return inspectRunner(t, direct).OutputEnded && next.Snapshot().InputState == sessionhost.InputUnknown
+						st := next.Snapshot()
+						return inspectRunner(t, direct).OutputEnded && st.InputState == sessionhost.InputUnknown && st.Fence == "unknown"
 					})
 					status["E"] = "reached-real-EOF;parser-path-dominated-by-frame-or-offset-refusal"
 				}
@@ -841,7 +842,10 @@ func TestOfflineHostCorpus(t *testing.T) {
 			} else if tc.E != 0 {
 				offlineAwait(t, "actual output EOF and host closed input", func() bool {
 					st := inspectRunner(t, direct)
-					return st.OutputEnded && next.Snapshot().InputState == sessionhost.InputUnknown
+					// Restored input starts unknown; only the committed fence
+					// also witnesses completion of asynchronous EOF handling.
+					host := next.Snapshot()
+					return st.OutputEnded && host.InputState == sessionhost.InputUnknown && host.Fence == "unknown"
 				})
 				status["E"] = "reached-real-output-EOF"
 			} else {
