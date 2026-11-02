@@ -20,10 +20,13 @@ import (
 	"github.com/relux-works/swarma-session-host/internal/localipc"
 )
 
-const MaxOutput = 32 << 10
+// MaxOutput bounds retained unread bytes, not cumulative child output.
+// It admits a 64KiB payload, its newline and one collector read buffer.
+const MaxOutput = (64 << 10) + 1 + OutputChunk
+const OutputChunk = 4096
 const MaxWrites = 128
 
-const ProtocolVersion = 3
+const ProtocolVersion = 4
 const WriteReceiptVersion = 1
 
 type Plan struct {
@@ -63,6 +66,8 @@ type Response struct {
 	ExitCode            int    `json:"exit_code"`
 	Data                []byte `json:"data,omitempty"`
 	Offset              int    `json:"offset"`
+	BaseOffset          int    `json:"base_offset"`
+	AtTail              bool   `json:"at_tail"`
 	Overflow            bool   `json:"overflow"`
 	Writes              int    `json:"writes"`
 }
@@ -79,37 +84,39 @@ type writeRecord struct {
 }
 
 type Server struct {
-	cfg         Config
-	listener    *net.UnixListener
-	child       *os.Process
-	processMu   sync.Mutex
-	pid         int
-	original    originalChild
-	childState  childOwnership
-	stdin       childInput
-	stdout      io.ReadCloser
-	instance    string
-	done        chan struct{}
-	outputDone  chan struct{}
-	closed      chan struct{}
-	closeOnce   sync.Once
-	closeErr    error
-	wg          sync.WaitGroup
-	mu          sync.Mutex
-	writeMu     sync.Mutex
-	owner       *net.UnixConn
-	conns       map[*net.UnixConn]bool
-	epoch       uint64
-	seq         uint64
-	writes      map[uint64]writeRecord
-	output      []byte
-	changed     chan struct{}
-	blocked     bool
-	overflow    bool
-	outputEnded bool
-	exited      bool
-	waitUnknown bool
-	exitCode    int
+	cfg          Config
+	listener     *net.UnixListener
+	child        *os.Process
+	processMu    sync.Mutex
+	pid          int
+	original     originalChild
+	childState   childOwnership
+	stdin        childInput
+	stdout       io.ReadCloser
+	instance     string
+	done         chan struct{}
+	outputDone   chan struct{}
+	closed       chan struct{}
+	closeOnce    sync.Once
+	closeErr     error
+	wg           sync.WaitGroup
+	mu           sync.Mutex
+	writeMu      sync.Mutex
+	owner        *net.UnixConn
+	conns        map[*net.UnixConn]bool
+	epoch        uint64
+	seq          uint64
+	writes       map[uint64]writeRecord
+	output       []byte
+	outputBase   int
+	readFrontier int
+	changed      chan struct{}
+	blocked      bool
+	overflow     bool
+	outputEnded  bool
+	exited       bool
+	waitUnknown  bool
+	exitCode     int
 
 	cooperativeStopOnce sync.Once
 	cooperativeStopCode string
@@ -184,7 +191,7 @@ func startWithReaperGate(cfg Config, capture func(int) (childBirth, error), wait
 	original := captureOriginalChild(process.Pid, capture)
 	s := &Server{cfg: cfg, listener: listener, child: process, pid: process.Pid, original: original, childState: childOwned, stdin: stdin, stdout: stdout,
 		instance: instance, identifySlots: make(chan struct{}, 2), done: make(chan struct{}), outputDone: make(chan struct{}), closed: make(chan struct{}),
-		conns: make(map[*net.UnixConn]bool), writes: make(map[uint64]writeRecord), changed: make(chan struct{}), exitCode: -1}
+		conns: make(map[*net.UnixConn]bool), writes: make(map[uint64]writeRecord), output: make([]byte, 0, MaxOutput), changed: make(chan struct{}), exitCode: -1}
 	s.wg.Add(3)
 	go s.collect(stdout)
 	go func() {
@@ -214,16 +221,38 @@ func (s *Server) changedLocked() {
 func (s *Server) collect(stdout io.ReadCloser) {
 	defer s.wg.Done()
 	defer close(s.outputDone)
-	buffer := make([]byte, 4096)
+	buffer := make([]byte, OutputChunk)
+collect:
 	for {
-		n, err := stdout.Read(buffer)
+		s.mu.Lock()
+		for len(s.output) == MaxOutput && !s.overflow {
+			changed := s.changed
+			s.mu.Unlock()
+			<-changed
+			s.mu.Lock()
+		}
+		if s.overflow {
+			s.mu.Unlock()
+			break
+		}
+		room := min(OutputChunk, MaxOutput-len(s.output))
+		tail := s.outputBase + len(s.output)
+		room = min(room, int(^uint(0)>>1)-tail)
+		if room == 0 {
+			s.overflow, s.blocked = true, true
+			s.changedLocked()
+			s.mu.Unlock()
+			break
+		}
+		s.mu.Unlock()
+		n, err := stdout.Read(buffer[:room])
 		if n > 0 {
 			s.mu.Lock()
-			if len(s.output)+n > MaxOutput {
-				s.overflow, s.blocked = true, true
-			} else if !s.overflow {
-				s.output = append(s.output, buffer[:n]...)
+			if s.overflow {
+				s.mu.Unlock()
+				break collect
 			}
+			s.output = append(s.output, buffer[:n]...)
 			s.changedLocked()
 			s.mu.Unlock()
 		}
@@ -231,6 +260,7 @@ func (s *Server) collect(stdout io.ReadCloser) {
 			break
 		}
 	}
+
 	s.mu.Lock()
 	// Closing the actual pipe cancels a reserved writer that has not entered
 	// native I/O and wakes a backpressured write. Publish termination only once
@@ -330,6 +360,7 @@ func (s *Server) handleWithPeerUID(conn *net.UnixConn, accepted time.Time, peerU
 		delete(s.conns, conn)
 		if s.owner == conn {
 			s.owner = nil
+			s.changedLocked()
 		}
 		s.mu.Unlock()
 		conn.Close()
@@ -373,12 +404,20 @@ func (s *Server) handleWithPeerUID(conn *net.UnixConn, accepted time.Time, peerU
 		if localipc.Write(conn, response) != nil {
 			return
 		}
+		// Only a successfully returned contiguous read admits later eviction.
+		if req.Op == "read" && response.Code == "ok" {
+			s.mu.Lock()
+			if s.owner == conn && req.Epoch == s.epoch && req.Offset <= s.readFrontier {
+				s.readFrontier = max(s.readFrontier, response.Offset)
+			}
+			s.mu.Unlock()
+		}
 	}
 }
 
 func (s *Server) snapshotLocked(code string) Response {
 	return Response{ProtocolVersion: ProtocolVersion, WriteReceiptVersion: WriteReceiptVersion, Code: code, Instance: s.instance, Epoch: s.epoch, PID: s.pid,
-		Exited: s.exited, OutputEnded: s.outputEnded, ExitCode: s.exitCode, Offset: len(s.output), Overflow: s.overflow, Writes: len(s.writes)}
+		Exited: s.exited, OutputEnded: s.outputEnded, ExitCode: s.exitCode, Offset: s.outputBase + len(s.output), BaseOffset: s.outputBase, AtTail: true, Overflow: s.overflow, Writes: len(s.writes)}
 }
 
 func (s *Server) process(conn *net.UnixConn, req Request) Response {
@@ -399,6 +438,8 @@ func (s *Server) process(conn *net.UnixConn, req Request) Response {
 			return s.snapshotLocked("controller_conflict")
 		}
 		s.owner, s.epoch = conn, req.Epoch
+		s.readFrontier = s.outputBase
+		s.changedLocked()
 		return s.snapshotLocked("ok")
 	}
 	s.mu.Lock()
@@ -425,7 +466,9 @@ func (s *Server) process(conn *net.UnixConn, req Request) Response {
 	case "write-receipt":
 		return s.receipt(conn, req)
 	case "read":
-		return s.read(req)
+		return s.read(conn, req)
+	case "consume":
+		return s.consume(conn, req)
 	case "stop":
 		s.writeMu.Lock()
 		defer s.writeMu.Unlock()
@@ -447,6 +490,7 @@ func (s *Server) process(conn *net.UnixConn, req Request) Response {
 			return s.snapshotLocked("stale_controller")
 		}
 		s.owner = nil
+		s.changedLocked()
 		return s.snapshotLocked("released")
 	default:
 		s.mu.Lock()
@@ -513,19 +557,28 @@ func (s *Server) write(conn *net.UnixConn, req Request) Response {
 	return s.snapshotLocked(code)
 }
 
-func (s *Server) read(req Request) Response {
+func (s *Server) read(conn *net.UnixConn, req Request) Response {
 	deadline := time.NewTimer(s.cfg.IOTimeout)
 	defer deadline.Stop()
 	for {
 		s.mu.Lock()
-		if req.Offset < 0 || req.Offset > len(s.output) || s.overflow {
+		if s.owner != conn || req.Epoch != s.epoch {
+			response := s.snapshotLocked("stale_controller")
+			s.mu.Unlock()
+			return response
+		}
+		if req.Offset < s.outputBase || req.Offset > s.readFrontier || req.Offset > s.outputBase+len(s.output) || s.overflow || req.Sequence != 0 || len(req.Data) != 0 || req.Digest != "" {
 			response := s.snapshotLocked("output_unavailable")
 			s.mu.Unlock()
 			return response
 		}
-		if req.Offset < len(s.output) || s.exited || s.outputEnded {
+		if req.Offset < s.outputBase+len(s.output) || s.exited || s.outputEnded {
 			response := s.snapshotLocked("ok")
-			response.Data = bytes.Clone(s.output[req.Offset:])
+			start := req.Offset - s.outputBase
+			end := min(start+OutputChunk, len(s.output))
+			response.Data = bytes.Clone(s.output[start:end])
+			response.Offset = s.outputBase + end
+			response.AtTail = end == len(s.output)
 			s.mu.Unlock()
 			return response
 		}
@@ -542,6 +595,25 @@ func (s *Server) read(req Request) Response {
 			return Response{Code: "runner_closed"}
 		}
 	}
+}
+
+// consume is an acknowledgement of durable Host replay custody, never a read.
+func (s *Server) consume(conn *net.UnixConn, req Request) Response {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.owner != conn || req.Epoch != s.epoch {
+		return s.snapshotLocked("stale_controller")
+	}
+	if req.Offset < s.outputBase || req.Offset > s.outputBase+len(s.output) || req.Offset > s.readFrontier || req.Sequence != 0 || len(req.Data) != 0 || req.Digest != "" {
+		return s.snapshotLocked("invalid_consumption")
+	}
+	n := req.Offset - s.outputBase
+	remaining := copy(s.output, s.output[n:])
+	clear(s.output[remaining:])
+	s.output = s.output[:remaining]
+	s.outputBase = req.Offset
+	s.changedLocked()
+	return s.snapshotLocked("ok")
 }
 
 func (s *Server) stop() Response {
@@ -589,6 +661,7 @@ func (s *Server) stopDirect() Response {
 		s.stdout.Close()
 		s.mu.Lock()
 		s.blocked, s.overflow = true, true
+		s.changedLocked()
 		s.mu.Unlock()
 	}
 	s.mu.Lock()
@@ -610,6 +683,10 @@ func (s *Server) Close() error {
 		s.mu.Unlock()
 		if result := s.stop(); result.Code != "stopped" {
 			s.stdout.Close()
+			s.mu.Lock()
+			s.blocked, s.overflow = true, true
+			s.changedLocked()
+			s.mu.Unlock()
 			s.closeErr = errors.New("runner_stop_unknown")
 			// A cooperative deadline remains unknown after forced root reap,
 			// but its completed reaper and closed transports still need joining.

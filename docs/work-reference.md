@@ -121,14 +121,19 @@ calling this real-use retention evidence, inspect a genuine first task artifact,
 verify the same admitted runner/native identities, complete a second admitted
 reference, and verify owned stop. No transcript or credential export is needed.
 
-The existing bounds remain: 32 notices, 128 runner writes, 32KiB retained output,
+The existing bounds remain: 32 notices, 128 runner writes, 69,633 bytes of retained output backlog,
 64KiB host state, 8KiB checkpoint and four pending 4096-byte writes. Tool output
-still consumes retained runner capacity even though checkpoint metadata omits
-it. Exhaustion closes input; output is not rotated. This mode is not an unattended
+uses retained capacity until the host durably checkpoints a complete-frame replay
+frontier and acknowledges it. Cumulative output may exceed the fixed backlog; a
+full backlog backpressures the child pipe. Partial bytes remain replayable without
+persisting their bodies. Oversized frames refuse input; they are not dropped. This mode is not an unattended
 service, automatic launcher enrollment or process-tree confinement.
 
 The runner defaults to `--stop-signal none`, retaining EOF-driven direct-child
-stop. Opt-in `--stop-signal term` closes stdin and sends TERM once to its
+stop. Use this EOF-first path for a wrapper that waits on its child without
+forwarding signals. A `stopped` receipt alone does not establish normal exit,
+complete output drain or descendant cleanup; verify exit status, output EOF and
+overflow separately. Opt-in `--stop-signal term` closes stdin and sends TERM once to its
 original still-owned, unreaped child, serialized with the original reaper.
 Unknown selectors refuse before binding a socket or spawning a child. The
 runner never discovers, adopts or signals a process group or another handle.

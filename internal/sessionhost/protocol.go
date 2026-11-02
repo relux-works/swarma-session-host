@@ -348,35 +348,80 @@ func (h *Host) reconcileOutbox() bool {
 	}
 }
 
+// validOutputWindow validates absolute offsets without imposing a cumulative cap.
+func validOutputWindow(r runner.Response, offset uint64) bool {
+	return r.Code == "ok" && !r.Overflow && r.BaseOffset >= 0 && r.Offset >= r.BaseOffset && r.Offset-r.BaseOffset <= runner.MaxOutput &&
+		uint64(r.BaseOffset) <= offset && offset <= uint64(r.Offset)
+}
+
 func (h *Host) pollProtocol() bool {
 	h.mu.Lock()
 	if h.ctx.Err() != nil || h.err != nil || h.protocolFailed {
 		h.mu.Unlock()
 		return false
 	}
-	epoch, offset := h.state.Epoch, h.outputOffset
+	epoch, offset, readOffset := h.state.Epoch, h.outputOffset, h.runnerReadOffset
 	h.mu.Unlock()
 	r, err := h.protocolCall(runner.Request{Op: "status", Execution: h.cfg.Execution, Epoch: epoch})
-	if err != nil || r.Code != "ok" || r.Overflow || r.Offset < 0 || uint64(r.Offset) < offset || r.Offset > runner.MaxOutput {
+	if err != nil || !validOutputWindow(r, offset) {
 		h.failProtocol()
 		return false
+	}
+	// A lost consume reply can leave already-durable bytes retained. A new
+	// controller must actually read that prefix before its read fence permits
+	// eviction. Do not feed bytes preceding the checkpoint into the driver.
+	for readOffset < offset {
+		prefix, e := h.protocolCall(runner.Request{Op: "read", Execution: h.cfg.Execution, Epoch: epoch, Offset: int(readOffset)})
+		if e != nil || !validOutputWindow(prefix, readOffset) || len(prefix.Data) == 0 || len(prefix.Data) > runner.OutputChunk || uint64(prefix.Offset) != readOffset+uint64(len(prefix.Data)) {
+			h.failProtocol()
+			return false
+		}
+		readOffset = uint64(prefix.Offset)
 	}
 	var data []byte
 	if offset < uint64(r.Offset) {
 		r, err = h.protocolCall(runner.Request{Op: "read", Execution: h.cfg.Execution, Epoch: epoch, Offset: int(offset)})
-		if err != nil || r.Code != "ok" || r.Overflow || r.Offset < 0 || r.Offset > runner.MaxOutput || uint64(r.Offset) != offset+uint64(len(r.Data)) {
+		if err != nil || !validOutputWindow(r, offset) || len(r.Data) == 0 || len(r.Data) > runner.OutputChunk || uint64(r.Offset) != offset+uint64(len(r.Data)) {
 			h.failProtocol()
 			return false
 		}
 		data = r.Data
+		readOffset = max(readOffset, uint64(r.Offset))
 	}
-	t, observeErr := h.driver.Observe(ap.Chunk{Offset: offset, Bytes: data, AtTail: true, EOF: r.Exited || r.OutputEnded})
+	terminal := (r.Exited || r.OutputEnded) && r.AtTail
+	t, observeErr := h.driver.Observe(ap.Chunk{Offset: offset, Bytes: data, AtTail: r.AtTail, EOF: terminal})
 	h.mu.Lock()
 	h.outputOffset = offset + uint64(len(data))
+	h.runnerReadOffset = readOffset
 	err = h.persistTransitionLocked(t)
+	var frontier uint64
+	if observeErr == nil && err == nil {
+		// Restore uses exactly the successfully persisted metadata checkpoint;
+		// it excludes any in-memory partial frame and performs no native I/O.
+		var restored ap.Driver
+		restored, frontier, err = h.cfg.ProtocolFactory(h.state.Protocol.Checkpoint)
+		if err == nil && (restored == nil || frontier < h.consumedOffset || frontier > h.outputOffset) {
+			err = errors.New("protocol_consumption_refused")
+		}
+	}
+	priorConsumed := h.consumedOffset
 	h.mu.Unlock()
-	if observeErr != nil || err != nil || r.Exited || r.OutputEnded {
+	if observeErr != nil || err != nil {
 		h.failProtocolObservation(observeErr != nil)
+		return false
+	}
+	if frontier > priorConsumed {
+		ack, e := h.protocolCall(runner.Request{Op: "consume", Execution: h.cfg.Execution, Epoch: epoch, Offset: int(frontier)})
+		if e != nil || ack.Code != "ok" || ack.Overflow || ack.BaseOffset != int(frontier) || ack.Offset < ack.BaseOffset {
+			h.failProtocol()
+			return false
+		}
+		h.mu.Lock()
+		h.consumedOffset = frontier
+		h.mu.Unlock()
+	}
+	if terminal {
+		h.failProtocolObservation(false)
 		return false
 	}
 	return true

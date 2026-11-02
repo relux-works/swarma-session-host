@@ -78,7 +78,7 @@ func TestOfflineRPCChild(t *testing.T) {
 		output.Lock()
 		switch string(mode) {
 		case "overflow", "overflow-eof":
-			_, err = os.Stdout.Write(bytes.Repeat([]byte("x"), runner.MaxOutput+1))
+			_, err = os.Stdout.Write(bytes.Repeat([]byte("x"), codexadapter.MaxFrame+1))
 			if err == nil && string(mode) == "overflow-eof" {
 				_, err = io.WriteString(os.Stdout, "{\"method\":\"future/notification\",\"params\":{\"text\":\""+offlineOutputSentinel)
 				if err == nil {
@@ -179,7 +179,13 @@ func (d *offlineDriver) Observe(chunk ap.Chunk) (ap.Transition, error) {
 	d.observed = true
 	d.mu.Unlock()
 	if !first {
-		return d.Driver.Observe(chunk)
+		x, err := d.Driver.Observe(chunk)
+		if err != nil {
+			d.mu.Lock()
+			d.observeErr = err.Error()
+			d.mu.Unlock()
+		}
+		return x, err
 	}
 	var result ap.Transition
 	var actions []ap.Action
@@ -311,6 +317,8 @@ type offlineProxy struct {
 	phase            int
 	errors           []error
 	releaseOnce      sync.Once
+	consumeFault     string
+	consumeFaultDone chan struct{}
 }
 
 func offlineProxyStart(t *testing.T, dir, upstream string, phase int) *offlineProxy {
@@ -399,10 +407,24 @@ func (p *offlineProxy) handle(c *net.UnixConn) {
 			hold()
 			return
 		}
+		p.mu.Lock()
+		fault, faultDone := "", p.consumeFaultDone
+		if req.Op == "consume" {
+			fault, p.consumeFault = p.consumeFault, ""
+		}
+		p.mu.Unlock()
+		if fault == "before" {
+			close(faultDone)
+			return
+		}
 		callCtx, finish := context.WithTimeout(ctx, time.Second)
 		response, err := up.Call(callCtx, req)
 		finish()
 		if err != nil {
+			return
+		}
+		if fault == "after" {
+			close(faultDone)
 			return
 		}
 		if target && p.phase == 3 {
@@ -505,7 +527,7 @@ func offlineDiskMetadata(t *testing.T, b []byte, dir, instance string, corruptio
 }
 
 // The 71 host rows exercise real recovery frontiers and selected factor pairs.
-// Earlier checkpoint/overflow refusals are recorded as such; they are never
+// Earlier checkpoint/frame refusals are recorded as such; they are never
 // credited as execution of a later Observe guard. No higher-order claim is made.
 func TestOfflineHostCorpus(t *testing.T) {
 	for _, tc := range adaptercorpus.Generate() {
@@ -737,8 +759,11 @@ func TestOfflineHostCorpus(t *testing.T) {
 				if err != nil {
 					return nil, 0, err
 				}
-				wrapped = &offlineDriver{Driver: d, c: tc, active: true, cycleChanged: make(chan struct{})}
-				return wrapped, offset, nil
+				w := &offlineDriver{Driver: d, c: tc, active: true, cycleChanged: make(chan struct{})}
+				if wrapped == nil {
+					wrapped = w
+				}
+				return w, offset, nil
 			}
 			next, err := sessionhost.Open(cfg)
 			status["K"] = "reached"
@@ -789,23 +814,30 @@ func TestOfflineHostCorpus(t *testing.T) {
 				t.Fatalf("OFFLINE_FAULT_SELECTION: want=%s got=%q err=%v", mode, consumed, err)
 			}
 			if tc.V != 0 {
-				var lastRunner runner.Response
-				var lastState sessionhost.State
-				defer func() {
-					t.Logf("OFFLINE_TERMINAL_WITNESS overflow=%t offset=%d ended=%t fence=%s input=%s", lastRunner.Overflow, lastRunner.Offset, lastRunner.OutputEnded, lastState.Fence, lastState.InputState)
-				}()
-				offlineAwait(t, "actual runner overflow and host fence", func() bool {
-					lastRunner = inspectRunner(t, direct)
-					lastState = next.Snapshot()
-					return lastRunner.Overflow && lastState.Fence == "unknown"
+				// V is now an oversized no-LF frame delivered in bounded reads,
+				// not cumulative runner overflow. Offset faults may dominate it.
+				offlineAwait(t, "oversize/offset refusal and retained window", func() bool {
+					r := inspectRunner(t, direct)
+					_, refusal := wrapped.observation()
+					return refusal != "" && !r.Overflow && r.Offset-r.BaseOffset <= runner.MaxOutput && next.Snapshot().Fence == "unknown"
 				})
-				status["V"] = "reached-real-runner-overflow"
+				_, refusal := wrapped.observation()
+				want := "stream_frame_bound"
+				status["V"] = "reached-real-oversized-frame-refusal"
+				if tc.O != 0 {
+					want = "stream_offset_or_bound"
+					status["V"] = "not-reached-offset-refusal"
+				}
+				if refusal != want {
+					t.Fatalf("OFFLINE_FRAME_OR_OFFSET_REFUSAL: want=%s got=%s", want, refusal)
+				}
 				if tc.E != 0 {
-					offlineAwait(t, "actual EOF after overflow", func() bool {
+					offlineAwait(t, "actual EOF after oversized frame", func() bool {
 						return inspectRunner(t, direct).OutputEnded && next.Snapshot().InputState == sessionhost.InputUnknown
 					})
-					status["E"] = "reached-real-EOF;parser-path-dominated-by-overflow"
+					status["E"] = "reached-real-EOF;parser-path-dominated-by-frame-or-offset-refusal"
 				}
+
 			} else if tc.E != 0 {
 				offlineAwait(t, "actual output EOF and host closed input", func() bool {
 					st := inspectRunner(t, direct)

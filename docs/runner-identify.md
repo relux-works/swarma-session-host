@@ -1,8 +1,9 @@
 # Read-only runner identify exchange
 
 The runner implements a separate runner-identify/1 ownership exchange on its
-existing private Unix endpoint. Controller protocol 3 and write-receipt
-protocol 1 retain their request/response forms and control behavior.
+existing private Unix endpoint. Controller protocol 4 supplies bounded reads and
+durable consumed offsets; write-receipt protocol 1 is unchanged. The identify
+exchange remains separate from controller admission and output acknowledgement.
 
 The first qualified runtime is Darwin/arm64 with cgo. Linux identify peer proof
 is explicitly unsupported; successful cross-compilation is not runtime

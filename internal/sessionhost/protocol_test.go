@@ -105,6 +105,45 @@ func TestProtocolProcess(t *testing.T) {
 		case "turn/start":
 			turn := fmt.Sprintf("turn-%d", r.ID)
 			write(map[string]any{"id": r.ID, "result": map[string]any{"turn": map[string]any{"id": turn, "status": "inProgress"}}})
+			if mode == "long-output" || mode == "partial-output" || mode == "oversized-output" {
+				prefix := []byte(`{"method":"future/notification","params":{"text":"`)
+				suffix := []byte(`"}}`)
+				line := append(append(append([]byte(nil), prefix...), bytes.Repeat([]byte("private-output-canary-"), codexadapter.MaxFrame/21+1)...), suffix...)
+				line = append(append(append([]byte(nil), prefix...), line[len(prefix):codexadapter.MaxFrame-len(suffix)]...), suffix...)
+				if mode == "oversized-output" {
+					if _, err := os.Stdout.Write(bytes.Repeat([]byte("x"), codexadapter.MaxFrame+1)); err != nil {
+						os.Exit(22)
+					}
+					continue
+				}
+				if mode == "partial-output" {
+					if _, err := os.Stdout.Write(line[:32768]); err != nil {
+						os.Exit(23)
+					}
+					if os.WriteFile("partial-written", nil, 0600) != nil {
+						os.Exit(24)
+					}
+					deadline := time.Now().Add(10 * time.Second)
+					for {
+						if _, err := os.Stat("finish-partial"); err == nil {
+							break
+						}
+						if time.Now().After(deadline) {
+							os.Exit(25)
+						}
+						time.Sleep(time.Millisecond)
+					}
+					if _, err := os.Stdout.Write(append(line[32768:], '\n')); err != nil {
+						os.Exit(26)
+					}
+				} else {
+					for range 6 {
+						if _, err := os.Stdout.Write(append(line, '\n')); err != nil {
+							os.Exit(27)
+						}
+					}
+				}
+			}
 			if mode == "unsupported-work-item" {
 				write(map[string]any{"method": "item/started", "params": map[string]any{"threadId": "synthetic-thread", "turnId": turn, "item": map[string]any{"id": "item-a", "type": "futureTool", "output": "private-refused-tool-canary"}}})
 			}

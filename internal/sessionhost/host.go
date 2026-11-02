@@ -111,35 +111,39 @@ type Config struct {
 	// Admission is an opt-in internal synthetic proof seam, not a hosted launcher.
 	Admission *admission.Config
 	// NoticeMode is immutable for an execution. Empty preserves synthetic notices.
-	NoticeMode      string
-	StateDir        string
-	Socket          string
-	Execution       string
-	Selection       Selection
-	Adapter         Adapter
-	IOTimeout       time.Duration
-	ProtocolName    string
+	NoticeMode   string
+	StateDir     string
+	Socket       string
+	Execution    string
+	Selection    Selection
+	Adapter      Adapter
+	IOTimeout    time.Duration
+	ProtocolName string
+	// ProtocolFactory restores local metadata without I/O. It may be called
+	// repeatedly to obtain the durable checkpoint's safe output replay offset.
 	ProtocolFactory func([]byte) (ap.Driver, uint64, error)
 	PollInterval    time.Duration
 }
 
 type Host struct {
-	cfg            Config
-	store          *store
-	client         *runner.Client
-	mu             sync.Mutex
-	state          State
-	err            error
-	ctx            context.Context
-	cancel         context.CancelFunc
-	kick           chan struct{}
-	wg             sync.WaitGroup
-	closeOnce      sync.Once
-	driver         ap.Driver
-	outputOffset   uint64
-	recovering     bool
-	protocolFailed bool
-	writeBlocked   bool
+	cfg              Config
+	store            *store
+	client           *runner.Client
+	mu               sync.Mutex
+	state            State
+	err              error
+	ctx              context.Context
+	cancel           context.CancelFunc
+	kick             chan struct{}
+	wg               sync.WaitGroup
+	closeOnce        sync.Once
+	driver           ap.Driver
+	outputOffset     uint64
+	runnerReadOffset uint64
+	consumedOffset   uint64
+	recovering       bool
+	protocolFailed   bool
+	writeBlocked     bool
 }
 
 func validNotice(n Notice) bool { return scalar.MatchString(n.ID) && scalar.MatchString(n.Reference) }
@@ -227,7 +231,7 @@ func Open(cfg Config) (*Host, error) {
 			saved = state.Protocol.Checkpoint
 		}
 		driver, outputOffset, err = cfg.ProtocolFactory(saved)
-		if err != nil || driver == nil || driver.Descriptor().Name != name || ap.Validate(driver.Descriptor(), driver.Snapshot()) != nil || outputOffset > runner.MaxOutput {
+		if err != nil || driver == nil || driver.Descriptor().Name != name || ap.Validate(driver.Descriptor(), driver.Snapshot()) != nil || outputOffset > uint64(^uint(0)>>1) {
 			store.close()
 			return nil, errors.New("protocol_restore_refused")
 		}
@@ -334,7 +338,7 @@ func Open(cfg Config) (*Host, error) {
 	if claim.Exited || claim.Overflow || (protocol && claim.OutputEnded) {
 		state.Fence = "unknown"
 	}
-	if protocol && (claim.Writes > int(state.Protocol.WireSequence) || outputOffset > uint64(claim.Offset)) {
+	if protocol && (claim.Writes > int(state.Protocol.WireSequence) || claim.BaseOffset < 0 || claim.Offset < claim.BaseOffset || outputOffset < uint64(claim.BaseOffset) || outputOffset > uint64(claim.Offset)) {
 		state.Fence = "unknown"
 	}
 	if state.StopRequested {
@@ -346,7 +350,7 @@ func Open(cfg Config) (*Host, error) {
 		return nil, err
 	}
 	workCtx, workCancel := context.WithCancel(context.Background())
-	h := &Host{cfg: cfg, store: store, client: client, state: state, ctx: workCtx, cancel: workCancel, kick: make(chan struct{}, 1), driver: driver, outputOffset: outputOffset, recovering: exists}
+	h := &Host{cfg: cfg, store: store, client: client, state: state, ctx: workCtx, cancel: workCancel, kick: make(chan struct{}, 1), driver: driver, outputOffset: outputOffset, runnerReadOffset: uint64(claim.BaseOffset), consumedOffset: uint64(claim.BaseOffset), recovering: exists}
 	if err := h.ObserveInput(); err != nil {
 		h.cancel()
 		client.Close()

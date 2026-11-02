@@ -37,6 +37,7 @@ func (s *Server) stopCooperatively(deliver childSignaler) string {
 		s.stdout.Close()
 		s.mu.Lock()
 		s.blocked, s.overflow = true, true
+		s.changedLocked()
 		s.mu.Unlock()
 	}
 	s.mu.Lock()

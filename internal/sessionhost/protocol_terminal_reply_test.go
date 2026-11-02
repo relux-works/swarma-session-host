@@ -42,6 +42,7 @@ func TestProtocolTerminalWriteReplyFencesOutbox(t *testing.T) {
 				reader := bufio.NewReader(conn)
 				var output []byte
 				var epoch uint64
+				base := 0
 				for {
 					var req runner.Request
 					if localipc.Read(reader, &req) != nil {
@@ -81,6 +82,11 @@ func TestProtocolTerminalWriteReplyFencesOutbox(t *testing.T) {
 							b, _ := json.Marshal(result)
 							output = append(output, append(b, '\n')...)
 						}
+					case "consume":
+						if req.Offset < base || req.Offset > len(output) {
+							return
+						}
+						base = req.Offset
 					case "read":
 						if req.Offset >= 0 && req.Offset <= len(output) {
 							r.Data = append([]byte(nil), output[req.Offset:]...)
@@ -94,6 +100,7 @@ func TestProtocolTerminalWriteReplyFencesOutbox(t *testing.T) {
 					}
 					r.Writes = int(writes.Load())
 					r.Offset = len(output)
+					r.BaseOffset, r.AtTail = base, true
 					r.OutputEnded = ended && r.Writes >= 2
 					conn.SetWriteDeadline(time.Now().Add(time.Second))
 					if localipc.Write(conn, r) != nil {

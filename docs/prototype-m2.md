@@ -89,7 +89,7 @@ session and optional turn. Only a matching successful completion changes a
 synthetic notice to `applied` with outcome `completed`. This proves no mailbox
 receipt, task acceptance or goal completion.
 
-Runner protocol version 3 advertises write-receipt version 1. An authenticated
+Runner protocol version 4 advertises write-receipt version 1. An authenticated
 `write-receipt` query supplies a sequence and exact payload digest. It only observes
 `written`, `write_unknown`, `write_missing` or `sequence_conflict`; it never reserves
 a sequence or writes absent input. A restored host uses this read-only operation
@@ -100,12 +100,26 @@ effect without opening the unknown fence or authorizing another write.
 
 The existing private atomic journal remains bounded by 64KiB; checkpoints by
 8KiB, an outbox by four 4096-byte frames, writes by 128, notices by 32, and runner
-output by 32KiB. Snapshots deep-copy checkpoint and outgoing bytes. Persisted
+retained output backlog by 69,633 bytes (64KiB payload + newline + 4096-byte read buffer). Snapshots deep-copy checkpoint and outgoing bytes. Persisted
 metadata omits incoming output and partial native lines. Restore requests replay
 from the last complete-frame offset. Input remains closed until the host observes
 the actual retained runner tail. Gaps, rewinds, overflow, malformed evidence, lost
 transport, failed/interrupted turns and EOF never silently become idle or retry.
-The retained prefix is not rotated; exhaustion currently closes delivery.
+Cumulative output may exceed that backlog. Reads return at most 4096 bytes,
+with absolute `offset`, retained `base_offset` and actual `at_tail`. Reads alone
+never evict. The current claimed connection/epoch can `consume` only contiguous
+successfully returned bytes; negative, rewound, unread, beyond-tail or payload-bearing
+acknowledgements reject without eviction. Equal-base retries are idempotent.
+At capacity the collector stops reading, applying kernel pipe backpressure.
+
+The host acknowledges only the restore offset derived from a successfully durable
+checkpoint, never its latest read cursor. Partial bodies remain in runner memory
+for replay and stay out of the journal. Persistence failure sends no acknowledgement.
+After a lost acknowledgement reply, replacement reads any retained durable prefix
+without replaying it into the adapter, then resumes at the exact checkpoint offset.
+A new connection starts its read fence at the retained base. Old protocol versions
+cannot supply these guarantees and are refused. Stop/Close wakes a full collector;
+a forced drain cutoff and absolute signed-offset exhaustion remain explicit failures.
 
 The worker polls nonblocking status and reads only an existing output suffix.
 Ordinary idle time therefore does not trigger a blocking-read timeout. Output EOF

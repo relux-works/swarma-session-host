@@ -333,38 +333,39 @@ func TestControllerReplacementPreservesChild(t *testing.T) {
 	}
 }
 
-// Output overflow closes writes and returns an explicit unavailable result;
-// retained output stays bounded and status/owned stop remain reachable.
+// Withheld consumption fills the fixed backlog without overflow; status/read
+// stay reachable. Explicit stop cuts off the unconsumed drain within its budget.
 func TestOutputPressurePreservesControl(t *testing.T) {
 	cfg := testConfig(t, "flood")
-	server, err := startTestRunner(t, cfg)
+	cfg.IOTimeout = 100 * time.Millisecond
+	_, err := startTestRunner(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { server.Close() })
 	client := testClient(t, cfg)
 	call(t, client, Request{Op: "claim", Execution: cfg.Execution, Epoch: 1}, "ok")
 	deadline := time.Now().Add(time.Second)
 	for {
-		server.mu.Lock()
-		overflow, changed := server.overflow, server.changed
-		server.mu.Unlock()
-		if overflow {
+		r := call(t, client, Request{Op: "status", Execution: cfg.Execution}, "ok")
+		if r.Overflow {
+			t.Fatal("backpressure became overflow")
+		}
+		if r.Offset == MaxOutput {
 			break
 		}
-		select {
-		case <-changed:
-		case <-time.After(time.Until(deadline)):
-			t.Fatal("fixture did not overflow")
+		if time.Now().After(deadline) {
+			t.Fatal("backlog did not fill")
 		}
+		time.Sleep(time.Millisecond)
 	}
-	read := call(t, client, Request{Op: "read", Execution: cfg.Execution, Epoch: 1}, "output_unavailable")
-	if !read.Overflow || read.Offset > MaxOutput || len(read.Data) != 0 {
-		t.Fatalf("overflow misreported: %+v", read)
+	r := call(t, client, Request{Op: "read", Execution: cfg.Execution, Epoch: 1}, "ok")
+	if r.AtTail || len(r.Data) != OutputChunk {
+		t.Fatal("read did not preserve bounded chunk/tail")
 	}
-	call(t, client, Request{Op: "write", Execution: cfg.Execution, Epoch: 1, Sequence: 1, Data: []byte("x")}, "write_refused")
-	call(t, client, Request{Op: "status", Execution: cfg.Execution}, "ok")
-	call(t, client, Request{Op: "stop", Execution: cfg.Execution, Epoch: 1}, "stopped")
+	stop := call(t, client, Request{Op: "stop", Execution: cfg.Execution, Epoch: 1}, "stopped")
+	if !stop.Overflow {
+		t.Fatal("unconsumed drain cutoff was hidden")
+	}
 }
 
 // Invalid plans and occupied endpoints refuse before a second child starts;
@@ -493,7 +494,7 @@ func TestCollectorReadFailureClosesTransport(t *testing.T) {
 	s.stdin = input
 	s.wg.Add(1)
 	s.collect(failedOutput{})
-	r := s.read(Request{})
+	r := s.read(nil, Request{})
 	if !r.OutputEnded || r.Exited || r.Code != "ok" || !s.blocked {
 		t.Fatal("read failure left transport eligible")
 	}

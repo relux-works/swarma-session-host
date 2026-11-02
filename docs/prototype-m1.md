@@ -106,7 +106,7 @@ descendants; root-child exit is not account-wide absence.
 | --- | --- |
 | IPC frame | 64KiB; closed JSON and bounded reads |
 | Runner write | 4096 bytes; 128 retained sequences per runner |
-| Runner stdout | 32KiB retained; overflow closes writes, reports unavailable; no silent replay-tail truncation |
+| Runner stdout | 69,633B retained backlog; durable consume frees bytes and full backlog applies pipe backpressure; explicit drain cutoff/offset exhaustion reports overflow |
 | Host records | 32 retained records, including completed/unknown receipts; no deletion to admit more |
 | State snapshot | 64KiB; refuse before acceptance when it cannot be written |
 | Connections | 8 per endpoint; excess connections close |

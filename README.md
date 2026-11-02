@@ -35,6 +35,12 @@ Its unexported qualification client has no command caller. External verifier
 integration and hosted-admission qualification remain pending; ownership does
 not establish current liveness.
 
+Runner control protocol 4 uses a fixed 69,633-byte retained output backlog and
+4096-byte reads with absolute offsets. Successful durable checkpoint acknowledgements
+free complete-frame bytes; partial bodies remain replayable. Full backlog applies
+pipe backpressure, so cumulative output can exceed the bound without truncation.
+See the [output custody contract](docs/prototype-m2.md).
+
 The runner also offers opt-in `--stop-signal term` for cooperative stop of its
 original child, with bounded grace/reap/drain phases and retained uncertainty.
 The default `none` retains EOF-driven stop. Both receipts concern only the
@@ -87,6 +93,7 @@ accounts or shared services are accessed.
 | Curator | `curator run codex_cli --native --profile PROFILE --model MODEL --effort EFFORT --permissions native -- app-server --listen stdio://` for an admitted disposable protocol test | Profile-managed environment and credential custody; no credential values or native transcripts in host artifacts |
 | macOS process identity | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -run TestOwnedKernelIdentity ./internal/admission` | Test output; reads only the owned test process in this check; no persisted native process inventory |
 | macOS child birth | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -run 'TestOriginal|TestChildWait|TestChildReap|TestChildClosed' ./internal/runner` | Owned-child lifecycle and kernel controls on stdout; no native session |
+| Output consumption fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestConsume|TestProtocolConsume' ./internal/runner ./internal/sessionhost` | Inert child backpressure, absolute offsets, durable consumption, reply-loss and replacement evidence on stdout |
 | Cooperative stop fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestCooperativeStop|TestOriginalChildSignalGuards|TestForcedStopAndReapedHandle' ./internal/runner` | Inert owned-child TERM, legacy EOF, retry, cutoff and signal-guard evidence on stdout; no native cleanup claim |
 | Runner identify qualification | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -p 1 -run 'TestIdentify|TestPeerIdentity' ./internal/runner ./internal/localipc` | Strict wire, owned sockets, lifecycle/non-effect and post-reply ordering fixtures on stdout; external readers remain unqualified |
 | macOS ps | `/bin/ps -p PID -o stat=` in `TestOwnedKernelChildLifecycle` | Non-reaping state observation of the explicitly owned child; no process discovery |
