@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -382,5 +383,101 @@ func TestNotificationStreamExpiryClosesBeforeStateLock(t *testing.T) {
 	notificationServiceDone(t, done)
 	if s := h.Snapshot(); s.Fence != "unknown" || len(s.Records) != 0 {
 		t.Fatal("partial expired request mutated intent or failed to fence")
+	}
+}
+
+// Observe only this inert test process's goroutine metadata. Retain no stack
+// payload: the witness must show the decoded stream handler waiting for mu,
+// rather than merely bytes buffered in a socket or an incomplete request.
+func notificationQueuedHandler(t *testing.T) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	buf := make([]byte, 256<<10)
+	for {
+		n := runtime.Stack(buf, true)
+		if n == len(buf) {
+			t.Fatal("queue witness unavailable: bounded goroutine snapshot truncated")
+		}
+		for _, block := range strings.Split(string(buf[:n]), "\n\n") {
+			if strings.Contains(block, "[sync.Mutex.Lock") &&
+				strings.Contains(block, "(*Host).notificationRequest") &&
+				strings.Contains(block, "(*Host).notificationStreamExchange") {
+				t.Log("queue witness: full decoded stream request waiting on Host admission mutex")
+				return
+			}
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatal("queue witness unavailable: no decoded stream handler observed waiting on mutex")
+		}
+	}
+}
+
+// A full valid trigger queued before the admission lock must not start new
+// persistence after its call expires. Normal admission persists one intent,
+// wakes once and permits one synthetic Prepare. The expired control permits
+// none. No scheduler/native child runs here, and this does not cancel a store
+// operation or native effect that already began inside admission before expiry.
+func TestNotificationStreamFullRequestQueuedAcrossExpiry(t *testing.T) {
+	for _, queued := range []bool{false, true} {
+		t.Run(fmt.Sprintf("queued=%v", queued), func(t *testing.T) {
+			h, q := journalUnit(t, false)
+			client, done := notificationService(t, h, q, 2000)
+			if queued {
+				func() {
+					h.mu.Lock()
+					defer h.mu.Unlock()
+					_ = client.SetDeadline(time.Now().Add(4 * time.Second))
+					frame, err := EncodeNotificationRequest(q)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if n, err := client.Write(frame); err != nil || n != len(frame) {
+						t.Fatalf("valid request not supplied: %d %v", n, err)
+					}
+					notificationQueuedHandler(t)
+					// EOF witnesses endpoint closure while mu is still held;
+					// the full decoded handler cannot yet enter admission.
+					if _, err := client.Read(make([]byte, 1)); !errors.Is(err, io.EOF) || h.ctx.Err() != nil {
+						t.Fatalf("expected expiry before releasing admission lock: %v", err)
+					}
+				}()
+				notificationServiceDone(t, done)
+			} else if r := notificationExchange(t, client, bufio.NewReader(client), q); r.Result != "accepted" {
+				t.Fatalf("normal trigger not accepted: %+v", r)
+			}
+			state, exists, err := h.store.read()
+			if err != nil || !exists {
+				t.Fatal("durable state unavailable", err)
+			}
+			woke := false
+			select {
+			case <-h.kick:
+				woke = true
+			default:
+			}
+			prepared := h.prepareProtocol()
+			prepares := h.driver.(*journalDriver).prepares.Load()
+			t.Logf("queued=%v durable_intents=%d correlations=%d wake=%v prepared=%v prepare_calls=%d fence=%s",
+				queued, len(state.Records), len(state.Notification.Attempts), woke, prepared, prepares, state.Fence)
+			if queued {
+				if len(state.Records) != 0 || len(state.Notification.Attempts) != 0 || woke || prepared || prepares != 0 {
+					t.Fatal("expired queued trigger began a new durable intent or scheduler action")
+				}
+				if state.Fence != "unknown" {
+					t.Fatal("expired lifecycle not fenced")
+				}
+			} else {
+				if len(state.Records) != 1 || len(state.Notification.Attempts) != 1 || state.Records[0].Notice.ID != q.NoticeID || !woke || !prepared || prepares != 1 {
+					t.Fatal("normal positive did not retain/prepare the original intent exactly once")
+				}
+				_ = client.Close()
+				notificationServiceDone(t, done)
+			}
+		})
 	}
 }

@@ -132,7 +132,7 @@ func (h *Host) notificationStreamExchange(conn *net.UnixConn, reader *bufio.Read
 	if !time.Now().Before(deadline) || h.ctx.Err() != nil {
 		return ErrNotificationUnresolved
 	}
-	r, err := h.notificationRequest(q)
+	r, err := h.notificationRequestUntil(q, deadline)
 	if err != nil {
 		return err
 	}

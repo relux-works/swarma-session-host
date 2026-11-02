@@ -3,6 +3,7 @@ package sessionhost
 import (
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/relux-works/swarma-session-host/internal/localipc"
 )
@@ -171,11 +172,21 @@ func notificationAttempt(r Record, b NotificationBinding) (*NotificationAttempt,
 // Native submission remains the existing work-reference path, never a second
 // worker, prompt renderer or direct write from this method.
 func (h *Host) notificationRequest(q NotificationRequest) (NotificationResponse, error) {
+	return h.notificationRequestUntil(q, time.Time{})
+}
+
+// The stream supplies its absolute call deadline. A request waiting to enter
+// admission has not started persistence; expiry while queued must not create
+// new intent. A zero deadline preserves the direct private journal primitive.
+func (h *Host) notificationRequestUntil(q NotificationRequest, deadline time.Time) (NotificationResponse, error) {
 	if !q.valid() {
 		return NotificationResponse{}, ErrNotificationFrame
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if !deadline.IsZero() && !time.Now().Before(deadline) {
+		return NotificationResponse{}, ErrNotificationUnresolved
+	}
 	r := NotificationResponse{Contract: q.Contract, RequestID: q.RequestID, Method: q.Method}
 	finish := func(result, reason string) (NotificationResponse, error) {
 		r.Result, r.Reason = result, reason
@@ -231,6 +242,12 @@ func (h *Host) notificationRequest(q NotificationRequest) (NotificationResponse,
 	next.Notification.Attempts = append(next.Notification.Attempts, notificationIntent{NoticeID: notice.ID, Sequence: record.Sequence})
 	if !notificationStateFits(next) {
 		return finish("refused", "capacity-full") // Proven before any store mutation.
+	}
+	// Check again at the persistence admission boundary, under the same lock.
+	// An admitted store operation may then outlive the caller's deadline and
+	// retain UNKNOWN; it is never canceled or reported absent by this check.
+	if !deadline.IsZero() && !time.Now().Before(deadline) {
+		return NotificationResponse{}, ErrNotificationUnresolved
 	}
 	if h.persistLocked(next) != nil {
 		return finish("unresolved", "attempt-unresolved")

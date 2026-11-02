@@ -16,7 +16,9 @@ primitives feed a private service over one supplied Unix stream. It serializes
 strict frames, requires an explicit 1..60000ms call budget, closes on loss and
 rejects a second attachment in the same Host lifecycle. Idle waiting consumes
 no call budget; expiry or a lost response retains any accepted intent as an
-unresolved obligation. The service has no public activation or CLI caller.
+unresolved obligation. A call that expires while waiting for Host admission
+cannot begin a new intent. Persistence admitted before expiry may still finish
+with an unresolved reply. The service has no public activation or CLI caller.
 Broker enrollment, inherited endpoint custody and live notification delivery
 remain unimplemented.
 A bounded Codex 0.164.0 app-server
