@@ -176,8 +176,14 @@ func (d *offlineDriver) Observe(chunk ap.Chunk) (ap.Transition, error) {
 	}
 	d.mu.Lock()
 	first := !d.observed
-	d.observed = true
 	d.mu.Unlock()
+	// A single dispatcher calls this driver. Publish observation only after
+	// the wrapped result (including its refusal) has been recorded.
+	defer func() {
+		d.mu.Lock()
+		d.observed = true
+		d.mu.Unlock()
+	}()
 	if !first {
 		x, err := d.Driver.Observe(chunk)
 		if err != nil {
@@ -257,6 +263,60 @@ func (d *offlineDriver) observation() (bool, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.observed, d.observeErr
+}
+
+type offlineGatedObservation struct {
+	ap.Driver
+	entered chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (d *offlineGatedObservation) Observe(ap.Chunk) (ap.Transition, error) {
+	close(d.entered)
+	<-d.release
+	return ap.Transition{}, d.err
+}
+
+// The corpus witness must remain pending while its wrapped call is blocked,
+// then publish the completed result. This checks fixture synchronization only;
+// the corpus separately exercises the real adapter's offset refusals.
+func TestOfflineDriverObservationCompletion(t *testing.T) {
+	for _, refusal := range []string{"", "stream_offset_or_bound"} {
+		name := "accepted"
+		if refusal != "" {
+			name = "refused"
+		}
+		t.Run(name, func(t *testing.T) {
+			inner := &offlineGatedObservation{entered: make(chan struct{}), release: make(chan struct{})}
+			if refusal != "" {
+				inner.err = errors.New(refusal)
+			}
+			d := &offlineDriver{Driver: inner, active: true}
+			done := make(chan struct{})
+			var release sync.Once
+			unblock := func() { release.Do(func() { close(inner.release) }) }
+			go func() {
+				defer close(done)
+				_, _ = d.Observe(ap.Chunk{Bytes: []byte("x")})
+			}()
+			defer func() {
+				unblock()
+				<-done
+			}()
+			<-inner.entered
+			if observed, err := d.observation(); observed || err != "" {
+				t.Errorf("OFFLINE_OBSERVATION_PENDING: blocked call published observed=%t err=%q", observed, err)
+			}
+			// Release and join before checking the final result; retain the same
+			// cleanup path even if the pending-state assertion fails.
+			unblock()
+			<-done
+			if observed, err := d.observation(); !observed || err != refusal {
+				t.Errorf("OFFLINE_OBSERVATION_RESULT: observed=%t err=%q want=%q", observed, err, refusal)
+			}
+		})
+	}
 }
 
 func offlineConfig(dir, socket string) sessionhost.Config {
