@@ -59,6 +59,10 @@ func validNotificationState(s State) bool {
 func (h *Host) installNotificationBinding(b NotificationBinding) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.installNotificationBindingLocked(b)
+}
+
+func (h *Host) installNotificationBindingLocked(b NotificationBinding) error {
 	if h.ctx.Err() != nil || h.err != nil || h.notificationClosed || !h.notificationHostMatchesLocked(b) || h.state.StopRequested {
 		return ErrNotificationUnresolved
 	}
@@ -80,14 +84,20 @@ func (h *Host) installNotificationBinding(b NotificationBinding) error {
 }
 
 func (h *Host) notificationHostMatchesLocked(b NotificationBinding) bool {
-	return b.valid() && h.driver != nil && h.state.Protocol != nil && h.state.Adapter == "codex" &&
+	return b.valid() && h.notificationHostIdentityMatchesLocked(b)
+}
+
+func (h *Host) notificationHostIdentityMatchesLocked(b NotificationBinding) bool {
+	return scalar.MatchString(b.Execution) && notificationU64(b.ControllerEpoch, true) &&
+		scalar.MatchString(b.RunnerInstance) && scalar.MatchString(b.NativeThread) &&
+		h.driver != nil && h.state.Protocol != nil && h.state.Adapter == "codex" &&
 		h.state.NoticeMode == WorkReference && h.state.Protocol.ObservedRelease == "0.164.0" &&
 		b.Execution == h.state.Execution && b.ControllerEpoch == strconv.FormatUint(h.state.Epoch, 10) &&
 		b.RunnerInstance == h.state.RunnerInstance && b.NativeThread == h.state.Protocol.View.NativeSession
 }
 
 func (h *Host) notificationCurrentLocked() bool {
-	return !h.notificationClosed && h.notificationBinding != nil && h.state.Notification != nil &&
+	return !h.notificationClosed && (h.notificationManager == nil || h.notificationManager.currentLocked()) && h.notificationBinding != nil && h.state.Notification != nil &&
 		*h.notificationBinding == h.state.Notification.Binding && h.notificationHostMatchesLocked(*h.notificationBinding)
 }
 
@@ -98,6 +108,9 @@ func (h *Host) loseNotificationBinding() {
 	defer h.mu.Unlock()
 	h.notificationBinding = nil
 	h.notificationClosed = true
+	if h.notificationManager != nil {
+		h.notificationManager.failLocked()
+	}
 	next := cloneState(h.state)
 	next.Fence, next.InputState = "unknown", InputUnknown
 	_ = h.persistLocked(next)

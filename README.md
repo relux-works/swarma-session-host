@@ -19,8 +19,12 @@ no call budget; expiry or a lost response retains any accepted intent as an
 unresolved obligation. A call that expires while waiting for Host admission
 cannot begin a new intent. Persistence admitted before expiry may still finish
 with an unresolved reply. The service has no public activation or CLI caller.
-Broker enrollment, inherited endpoint custody and live notification delivery
-remain unimplemented.
+A private [attachment lifecycle](docs/notification-lifecycle.md) now claims one
+preparation per Host, freezes actual Host identity before endpoint transfer, and
+serializes service installation against terminal loss. It requires admitted
+manager and live broker checks; it has no production implementation of those
+checks or public activation path. Broker enrollment, designated child transfer
+and live notification delivery remain unimplemented.
 A bounded Codex 0.164.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted
