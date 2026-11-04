@@ -66,6 +66,18 @@ The current resource-only `Open` supplies no ordinary runtime-operation admissio
 so its public `Prepare` refuses before contacting Core or a broker. The selected
 wire handler must retain the actual operation/controller correlation. Options,
 expected JSON and copied snapshots cannot supply that private admission boundary.
+
+After that independent ordinary admission, the continuing manager retains one
+notification-operation claim before contacting a broker. It binds the exact
+launch/resume bytes, kind and operation ID to this owner. An identical completed
+request returns the same actual attachment; a pending, refused or altered request
+cannot prepare another provider or allocate another pair. A closed attachment
+stays the same terminal lifecycle. This in-memory reconciliation is not durable
+operation recovery after manager exit and does not implement ordinary admission.
+Close cancels and joins an in-flight claimed preparation before releasing its
+retained record roots. Provider preparation and cleanup must honor the explicit
+finite lifetime; the manager does not abandon an owned callback on waiter expiry.
+
 The implementation below that boundary invokes the existing fixed `curator config launcher` and
 `curator env resolve RUNTIME --profile PROFILE --format json` readers in the
 retained workspace, without repair. Outputs and execution are bounded. The

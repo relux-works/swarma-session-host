@@ -89,6 +89,7 @@ type NotificationManager struct {
 	broker      NotificationBroker
 	mu          sync.Mutex
 	attachments map[*ManagerAttachment]struct{}
+	operation   *managerNotificationOperation
 	closed      bool
 	read        managerCoreRead
 	admission   managerOperationAdmission
@@ -129,12 +130,26 @@ func (m *NotificationManager) Prepare(ctx context.Context, kind string, data []b
 	m.mu.Lock()
 	closed := m.closed
 	m.mu.Unlock()
-	if closed || m.records == nil || m.broker == nil || m.admission == nil {
+	if closed || m.owner == nil || m.records == nil || m.broker == nil || m.admission == nil {
 		return nil, errMemberRecordUnavailable
 	}
 	if m.admission.checkManagerOperation(ctx, m.owner.host, kind, data) != nil {
 		return nil, errMemberRecordUnavailable
 	}
+	claim, first, err := m.claimOperation(ctx, kind, data)
+	if err != nil {
+		return nil, err
+	}
+	if !first {
+		return claim.attachment, nil
+	}
+	defer close(claim.done)
+	// The short request can cancel this preparation, but it never owns the
+	// continuing manager. Conversely Close must cancel and join this attempt,
+	// including while the broker is still preparing and no attachment exists.
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(m.owner.ctx, cancel)
+	defer func() { stop(); cancel() }()
 	op, err := m.records.retainOperation(kind, data)
 	if err != nil {
 		return nil, err
@@ -192,6 +207,7 @@ func (m *NotificationManager) Prepare(ctx context.Context, kind string, data []b
 		return nil, errMemberRecordUnavailable
 	}
 	m.attachments[a] = struct{}{}
+	claim.attachment = a
 	m.mu.Unlock()
 	go func() { <-lifecycle.done; _ = a.Close() }()
 	return a, nil
@@ -202,6 +218,16 @@ func (m *NotificationManager) Close(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	m.closed = true
+	operation := m.operation
+	m.mu.Unlock()
+	// Stop admitting effects and cancel all owner-parented work before joining
+	// a preparation that has not yet published an attachment. Do not hold mu
+	// while provider cleanup or attachment retirement can take that same lock.
+	m.owner.cancel()
+	if operation != nil {
+		<-operation.done
+	}
+	m.mu.Lock()
 	var all []*ManagerAttachment
 	for a := range m.attachments {
 		all = append(all, a)
