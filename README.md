@@ -27,7 +27,11 @@ checks or public activation path. Broker enrollment, designated child transfer
 and live notification delivery remain unimplemented. A private continuing-owner
 core now retains an opened Host across individual request lifetimes and releases
 its controller at a finite custody bound. This resource owner cannot admit a
-member or activate notifications.
+member or activate notifications. A private configured-record reader now retains
+the selected directory and unique member record, checks actual file identity and
+revision on reuse, and closes retained handles with that owner. This record
+observation still requires full operation/profile/workflow and broker admission
+before activation.
 A bounded Codex 0.164.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted

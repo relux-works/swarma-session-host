@@ -31,6 +31,26 @@ stop or storage failure; observed loss is terminal. Canceling a close waiter
 does not abandon cleanup. The owner core supplies resource ownership only;
 it cannot implement member admission or activate a notification attachment.
 
+A private record-source reader opens the composition-selected existing member
+record directory. It resolves an explicit opaque admission reference uniquely,
+retains the actual directory/file identities and exact byte revision, and rejects
+missing or duplicate references, symlinks, writable sources and later substitution.
+It checks current ownership before each observation and closes retained handles
+when that owner ends. A separately opened source or copied owner cannot substitute
+for an existing retained origin. Observed revision loss remains terminal after
+matching bytes are restored.
+
+The original record fields are validated against the pinned published
+session-manager schema. Strict JSON validation precedes separating the new optional
+notification input, whose fields are closed and explicit. Legacy records may
+coexist without notification input. The reader has a 64KiB per-record bound and
+1024 directory-entry bound; incomplete or indeterminate scans refuse. Errors
+contain no record values. Filesystem checks are optimistic current observations,
+not an exclusion lock against a concurrent operator writer or continuous-history
+proof. Actual profile/workspace/workflow/operation admission and Source's exact
+server predicate and current named selection remain required. No record-reader
+method grants notification custody or allocates an attachment.
+
 The manager and broker admission checks currently have private interfaces and
 inert test implementations only. They are not public proof constructors, request fields or
 production admission. The actual continuing selected-manager owner, broker
@@ -44,7 +64,7 @@ Run on macOS with the project's Go toolchain and cgo available:
 
 ```sh
 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 \
-  -run '^TestContinuingOwner|^TestManagedNotification|^TestNotificationStream|^TestNotificationJournal' \
+  -run '^TestMemberRecord|^TestContinuingOwner|^TestManagedNotification|^TestNotificationStream|^TestNotificationJournal' \
   ./internal/sessionhost
 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go vet -p 1 ./internal/sessionhost
 ```
@@ -58,3 +78,9 @@ Continuing-owner tests open an actual local Host against an owned inert Go
 child, verify controller release and preservation of that runner, and reject
 foreign Host objects beside a valid current owner. No test here establishes
 real member admission, Source enrollment or productive native execution.
+
+Record-source tests use only owned temporary files and inert children. They pair
+valid retained records and legitimate legacy forms with missing/duplicate refs,
+identical-byte file replacement, in-place revision changes, source substitution,
+strict input failures and owner cancellation. They do not qualify a real member
+record, resolved profile lock, native home or broker enrollment.
