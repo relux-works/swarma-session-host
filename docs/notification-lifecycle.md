@@ -51,21 +51,58 @@ proof. Actual profile/workspace/workflow/operation admission and Source's exact
 server predicate and current named selection remain required. No record-reader
 method grants notification custody or allocates an attachment.
 
-Private operation correlation now validates the original launch/resume schema
-before independently resolving its member reference. It compares the retained
-record's runtime, profile lock, expected selectors and timeout, retains the actual
-workspace directory, and binds later rechecks to the exact operation bytes and
-kind. Plain requests retain their null station admission key. A supplied station
-key must match the selected record. Legacy doorbell and Host intent conflict.
-These checks do not attest the incoming Core workflow's origin or resolve a
-profile; they remain insufficient to activate a production attachment.
+The continuing manager validates complete launch/resume and configured-record
+input through the published session-manager schema module. It independently
+resolves the member reference, compares runtime, profile lock, selectors and
+explicit timeout, and retains the physical workspace and exact operation bytes.
+Plain requests retain null station admission keys. A supplied station key must
+match the selected record. Legacy doorbell and Host intent conflict.
 
-The manager and broker admission checks currently have private interfaces and
-inert test implementations only. They are not public proof constructors, request fields or
-production admission. The actual continuing selected-manager owner, broker
-adapter, designated child transfer and productive native use still require
-integration and qualification. This local lifecycle alone does not make a
-session launchable through the Host.
+The public, a2a-independent `manager` Go package exposes `Open`, `Prepare`,
+`Attachment.Bootstrap`, `Attachment.Projection` and `Close`. `Open` retains an
+actual controller and record source for an explicit finite lifetime; it starts
+no native runtime. Options and projections establish no admission on their own.
+The current resource-only `Open` supplies no ordinary runtime-operation admission,
+so its public `Prepare` refuses before contacting Core or a broker. The selected
+wire handler must retain the actual operation/controller correlation. Options,
+expected JSON and copied snapshots cannot supply that private admission boundary.
+The implementation below that boundary invokes the existing fixed `curator config launcher` and
+`curator env resolve RUNTIME --profile PROFILE --format json` readers in the
+retained workspace, without repair. Outputs and execution are bounded. The
+manager consumes the selected workflow and profile identity, compares the whole
+canonical fragment digest, and leaves composition fields opaque. The Launcher
+retains responsibility for its complete fragment parser and composition.
+Unavailable or stale Core reads refuse; no repair or metadata fallback runs.
+
+Configure one trusted `Broker` in the optional composition. Its `Prepare` must
+independently observe and retain its provider origin before Host socket
+allocation. `Origin.Recheck` checks the actual manager; copying `Origin` values
+is insufficient. `PreparedBroker.Recheck` checks the provider's actual custody.
+`PreparedBroker.References` supplies the retained provider scope's opaque member,
+connection, configuration and profile references. The connection reference may
+differ from the public stable connection selector; no equality or derivation is
+assumed. Those actual references stay frozen and are rechecked against the same
+prepared object.
+Both run again at lifecycle boundaries and before method admission, outside the
+Host mutex. This is an optimistic current observation, not a filesystem writer
+lock or an attestation of unobserved history.
+
+`Bootstrap` transfers one endpoint, supplies the frozen Host identity and an
+`OnEnrolled` gate, and permits no second transfer. A provider's actual live
+`Enrollment` supplies its complete binding, finite lifetime and recheck. The gate
+installs Host service and returns before the provider writes its installed
+acknowledgement. A nil completion means the endpoint was not consumed; a nonnil
+completion owns cleanup even when bootstrap returns an error. Provider return
+without successful enrollment refuses. A successful completion continues under
+the retained owner's lifetime, independently of the request's later cancellation.
+Termination of the consumed completion also fences the Host service, even if
+the enrolled view has not yet observed cancellation.
+Close cancels and joins in-flight bootstrap and provider cleanup before releasing
+retained record/workspace handles; it does not stop the native runner.
+
+The provider adapter and selected manager wire-handler docking remain pending.
+No default broker, provider success, native launch authority or live capability
+is advertised by the generic package or these fixtures.
 
 ## Verification
 
@@ -73,8 +110,8 @@ Run on macOS with the project's Go toolchain and cgo available:
 
 ```sh
 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 \
-  -run '^TestMemberOperation|^TestMemberRecord|^TestContinuingOwner|^TestManagedNotification|^TestNotificationStream|^TestNotificationJournal' \
-  ./internal/sessionhost
+  -run '^TestManager|^TestMemberOperation|^TestMemberRecord|^TestContinuingOwner|^TestManagedNotification|^TestNotificationStream|^TestNotificationJournal' \
+  ./internal/sessionhost ./manager
 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go vet -p 1 ./internal/sessionhost
 ```
 
@@ -93,3 +130,11 @@ valid retained records and legitimate legacy forms with missing/duplicate refs,
 identical-byte file replacement, in-place revision changes, source substitution,
 strict input failures and owner cancellation. They do not qualify a real member
 record, resolved profile lock, native home or broker enrollment.
+
+Manager tests use owned inert Core subprocesses, an explicit model of the still
+unimplemented ordinary wire-handler admission, and provider models. They cover
+all four emitted fragment versions, exact no-repair command arguments, complete
+digest/profile/workflow mismatch, duplicate and oversized output, nonzero exit,
+cancellation, missing provider, refused preparation, callback-before-return,
+invalid completion, terminal origin drift and close during bootstrap. They do
+not invoke real Core resolution, open a native home or enroll a live provider.

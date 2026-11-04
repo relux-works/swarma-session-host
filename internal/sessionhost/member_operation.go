@@ -25,8 +25,9 @@ type memberOperationRequest struct {
 	Operation string `json:"operation_id"`
 	Runtime   string `json:"runtime"`
 	Profile   struct {
-		Name string `json:"name"`
-		Lock string `json:"lock_sha256"`
+		Name           string `json:"name"`
+		Lock           string `json:"lock_sha256"`
+		FragmentDigest string `json:"fragment_digest"`
 	} `json:"profile"`
 	Cwd   string `json:"cwd"`
 	Scope struct {
@@ -55,7 +56,7 @@ type retainedMemberOperation struct {
 
 func parseMemberOperation(kind string, data []byte) (memberOperationRequest, error) {
 	var q memberOperationRequest
-	if (kind != "launch" && kind != "resume") || len(data) > managerschema.Limit {
+	if (kind != "launch" && kind != "resume") || managerschema.Validate(kind+".schema.json", data) != nil {
 		return q, errMemberRecordUnavailable
 	}
 	if _, err := managerschema.CanonicalJSON(data); err != nil {
@@ -66,9 +67,7 @@ func parseMemberOperation(kind string, data []byte) (memberOperationRequest, err
 		return q, errMemberRecordUnavailable
 	}
 	raw, present := object["notification"]
-	delete(object, "notification")
-	baseline, err := json.Marshal(object)
-	if err != nil || managerschema.Validate(kind+".schema.json", baseline) != nil || !present || json.Unmarshal(data, &q) != nil {
+	if !present || json.Unmarshal(data, &q) != nil {
 		return memberOperationRequest{}, errMemberRecordUnavailable
 	}
 	var shape map[string]json.RawMessage

@@ -164,12 +164,20 @@ func TestContinuingOwnerTerminal(t *testing.T) {
 			defer cancel()
 			expires := time.Now().Add(10 * time.Second)
 			if how == "expiry" {
-				expires = time.Now().Add(200 * time.Millisecond)
+				// Opening performs bounded runner I/O. Leave setup a real margin;
+				// the claim here is deadline cleanup after a successful Open.
+				expires = time.Now().Add(3 * time.Second)
 			}
 			o := continuingOwnerOpen(t, parent, expires, cfg)
 			switch how {
 			case "parent-cancel":
 				cancel()
+			case "expiry":
+				select {
+				case <-o.done:
+				case <-time.After(time.Until(expires) + 2*time.Second):
+					t.Fatal("finite owner deadline failed to join")
+				}
 			case "host-close":
 				_ = o.host.Close()
 			case "concurrent-close":

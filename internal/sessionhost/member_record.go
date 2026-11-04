@@ -161,12 +161,11 @@ func (s *memberRecordSource) close() error {
 	return err
 }
 
-// Strict reader validation precedes any unmarshal/removal. In particular the
-// canonicalizer's special top-level sig omission is NOT applied to our input:
-// baseline validation below receives the original decoded members, including sig.
+// The genuine published input schema validates the complete original document
+// before projection. Its closed reader rejects duplicate keys and unknown sig.
 func parseMemberRecord(data []byte) (memberRecord, error) {
 	var r memberRecord
-	if len(data) > managerschema.Limit {
+	if managerschema.Validate("werkstatt-record.schema.json", data) != nil {
 		return r, errMemberRecordUnavailable
 	}
 	if _, err := managerschema.CanonicalJSON(data); err != nil {
@@ -177,9 +176,7 @@ func parseMemberRecord(data []byte) (memberRecord, error) {
 		return r, errMemberRecordUnavailable
 	}
 	notification, present := object["notification"]
-	delete(object, "notification")
-	baseline, err := json.Marshal(object)
-	if err != nil || managerschema.Validate("werkstatt-record.schema.json", baseline) != nil || json.Unmarshal(data, &r) != nil {
+	if json.Unmarshal(data, &r) != nil {
 		return memberRecord{}, errMemberRecordUnavailable
 	}
 	if !present {
