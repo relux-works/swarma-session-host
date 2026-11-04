@@ -24,7 +24,10 @@ preparation per Host, freezes actual Host identity before endpoint transfer, and
 serializes service installation against terminal loss. It requires admitted
 manager and live broker checks; it has no production implementation of those
 checks or public activation path. Broker enrollment, designated child transfer
-and live notification delivery remain unimplemented.
+and live notification delivery remain unimplemented. A private continuing-owner
+core now retains an opened Host across individual request lifetimes and releases
+its controller at a finite custody bound. This resource owner cannot admit a
+member or activate notifications.
 A bounded Codex 0.164.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted
