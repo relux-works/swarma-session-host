@@ -42,6 +42,7 @@ type memberRecord struct {
 	Profile      string                   `json:"profile"`
 	ProfileLock  string                   `json:"profile_lock_sha256"`
 	Clone        string                   `json:"clone"`
+	Doorbell     json.RawMessage          `json:"doorbell"`
 	Identity     string                   `json:"identity"`
 	Notification *memberNotificationInput `json:"notification"`
 }
@@ -62,12 +63,13 @@ type memberRecordSource struct {
 }
 
 type retainedMemberRecord struct {
-	source   *memberRecordSource
-	file     *os.File
-	identity os.FileInfo
-	revision [32]byte
-	record   memberRecord
-	lost     bool // Terminal once an actual source/revision loss has been observed.
+	source    *memberRecordSource
+	file      *os.File
+	identity  os.FileInfo
+	revision  [32]byte
+	record    memberRecord
+	workspace *os.File
+	lost      bool // Terminal once an actual source/revision loss has been observed.
 }
 
 func recordInfoSafe(info os.FileInfo, directory bool) bool {
@@ -147,6 +149,10 @@ func (s *memberRecordSource) close() error {
 		if record.file != nil {
 			_ = record.file.Close()
 			record.file = nil
+		}
+		if record.workspace != nil {
+			_ = record.workspace.Close()
+			record.workspace = nil
 		}
 		delete(s.records, record)
 	}
@@ -344,6 +350,10 @@ func (r *retainedMemberRecord) close() {
 	defer r.source.mu.Unlock()
 	r.lost = true
 	delete(r.source.records, r)
+	if r.workspace != nil {
+		_ = r.workspace.Close()
+		r.workspace = nil
+	}
 	if r.file != nil {
 		_ = r.file.Close()
 		r.file = nil

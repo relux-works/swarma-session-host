@@ -51,6 +51,15 @@ proof. Actual profile/workspace/workflow/operation admission and Source's exact
 server predicate and current named selection remain required. No record-reader
 method grants notification custody or allocates an attachment.
 
+Private operation correlation now validates the original launch/resume schema
+before independently resolving its member reference. It compares the retained
+record's runtime, profile lock, expected selectors and timeout, retains the actual
+workspace directory, and binds later rechecks to the exact operation bytes and
+kind. Plain requests retain their null station admission key. A supplied station
+key must match the selected record. Legacy doorbell and Host intent conflict.
+These checks do not attest the incoming Core workflow's origin or resolve a
+profile; they remain insufficient to activate a production attachment.
+
 The manager and broker admission checks currently have private interfaces and
 inert test implementations only. They are not public proof constructors, request fields or
 production admission. The actual continuing selected-manager owner, broker
@@ -64,7 +73,7 @@ Run on macOS with the project's Go toolchain and cgo available:
 
 ```sh
 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 \
-  -run '^TestMemberRecord|^TestContinuingOwner|^TestManagedNotification|^TestNotificationStream|^TestNotificationJournal' \
+  -run '^TestMemberOperation|^TestMemberRecord|^TestContinuingOwner|^TestManagedNotification|^TestNotificationStream|^TestNotificationJournal' \
   ./internal/sessionhost
 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go vet -p 1 ./internal/sessionhost
 ```
