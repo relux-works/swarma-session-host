@@ -323,7 +323,13 @@ func generate(source, pkg, old, new, out, modFile string) error {
 		if p == "go.mod" {
 			mode = 0644
 		}
-		if e = write(filepath.Join(out, filepath.FromSlash(p)), output[p], mode); e != nil {
+		path := filepath.Join(out, filepath.FromSlash(p))
+		if e = write(path, output[p], mode); e != nil {
+			return e
+		}
+		// Creation applies the process umask. The candidate must retain the
+		// exact permissions recorded in its manifest, including go.mod's 0644.
+		if e = os.Chmod(path, mode); e != nil {
 			return e
 		}
 	}
