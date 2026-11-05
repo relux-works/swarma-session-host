@@ -33,6 +33,17 @@ admission must come from the actual selected manager handler. This is a composit
 listener or manager wire endpoint. The optional provider adapter, selected
 manager wire-handler docking, designated provider child transfer and productive
 native notification use still require integration and qualification.
+Private ordinary-method preparation now connects complete published requests
+to retained pre-child member records, a configured Launcher file/digest and
+the closed environment baseline. Its consumed plan is copied data; it starts
+no child and grants no production admission. Executable drift and duplicate
+attempts refuse. The bounded diagnostic sink retains fixed labels only and
+never infers execution phase from stderr or an exit code. The runner now owns
+an optional separate stderr collector with that fixed classifier, including
+joined cleanup and observations of its actual child PID, Wait and stderr EOF.
+The ordinary operation can derive its fixed runner configuration once; that
+data still grants no execution authority. Selected-handler start admission,
+native initialization and controller ownership transfer remain pending.
 A bounded Codex 0.164.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted

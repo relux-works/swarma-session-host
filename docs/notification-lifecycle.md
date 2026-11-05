@@ -67,6 +67,68 @@ so its public `Prepare` refuses before contacting Core or a broker. The selected
 wire handler must retain the actual operation/controller correlation. Options,
 expected JSON and copied snapshots cannot supply that private admission boundary.
 
+The private pre-child owner retains the same configured physical record source
+without constructing a Host or runner. It has its own explicit finite lifetime;
+each complete valid request consumes one preparation claim before record or
+compiler refusal can occur. Successful identical requests share that claim.
+Its start boundary rechecks the actual record/workspace and consumes one attempt
+before returning a copied fixed invocation. Cancellation at that boundary,
+conflicting request bytes, a failed preparation or a previously consumed attempt
+cannot recycle it. Owner shutdown joins retained-file cleanup; completion of a
+short request does not own that continuing lifetime. Existing Host-bound record
+and custody methods still require a non-null actual Host owner and refuse this
+pre-child source. This is resource/once-claim implementation, not an installed
+ordinary wire handler, executable admission or native initialization proof; the
+public resource-only admission guard remains closed.
+
+The private ordinary-method dispatcher now connects the selected existing
+method and complete published body to that pre-child owner. It retains one
+configured Launcher executable and its parent directory before preparing any
+request. The path must be absolute and canonical, with no symlink spelling;
+the file must be regular, executable, at most 64MiB, owned by root or the
+operator, and not writable by group or others. Special permission bits refuse.
+Its configured lowercase SHA-256 must match. Preparation and the consumed
+plan boundary recheck file/parent identity, mode, size, modification time and
+the complete digest. Observed loss is terminal even after matching bytes are
+restored. These are optimistic observations, not an atomic filesystem lock
+or proof that an installation or policy has been admitted.
+
+The dispatcher uses the closed configured environment parser and copies the
+fixed nineteen arguments, retained workspace and baseline into a single-use
+plan. An identical request shares its operation; another ID, altered bytes,
+unsupported semantics, canceled take or executable drift cannot recycle a
+failed claim. Optional `TMPDIR` stays optional. Paired member selectors stay
+in the agreed flags, with no incoming `A2A_*` baseline entries. Owner shutdown
+joins executable and member handles independently of short request lifetime.
+This is private dispatch/plan preparation, with no new endpoint or public
+launch entry. The returned plan remains data and is not ordinary admission.
+
+A separate bounded diagnostic discard sink recognizes only the exact fixed
+`protocol_child_environment_refused` line. All other nonempty stderr becomes
+the fixed `protocol_child_diagnostic_redacted` label; raw bytes are not retained.
+Its work and state are bounded per write. Every exit observation keeps phase
+unverified, including statuses 64, 70 and 78 and recognized diagnostics, since
+the native process can emit the same values after replacement. The runner's
+`protocol-child-v1` diagnostic mode connects its actual child's separate stderr
+to this fixed classifier. Empty mode preserves discarded stderr; every other
+mode refuses before endpoint creation or child start. No arbitrary writer
+callback receives diagnostics. The collector drains through a fixed read buffer
+and retains only the constant classifier state. Native stdout remains separate.
+
+`LauncherDiagnostics` observes the runner's actual owned PID, exit/unknown-Wait
+state and independent stderr completion. Closing the read handle joins that
+collector even if another writer keeps the pipe open; an interrupted read is
+incomplete capture, not EOF. Neither clean EOF nor a fixed label proves which
+side of exec emitted it. The ordinary operation can derive the corresponding
+runner configuration from its same consumed claim, retained execution ID,
+executable, nineteen arguments and copied environment. The runner endpoint and
+timeout are composition-selected; no request can replace them. This remains
+configuration data and does not invoke `runner.Start` or supply policy admission.
+Actual selected wire entry, final execution-policy admission, direct-child
+start from that admitted handler, native initialization/controller
+correlation and ownership transfer still need wiring and qualification before
+notification effects. The public resource-only guard remains closed.
+
 After that independent ordinary admission, the continuing manager retains one
 notification-operation claim before contacting a broker. It binds the exact
 launch/resume bytes, kind and operation ID to this owner. An identical completed
@@ -116,13 +178,41 @@ The provider adapter and selected manager wire-handler docking remain pending.
 No default broker, provider success, native launch authority or live capability
 is advertised by the generic package or these fixtures.
 
+## Protocol-child request construction
+
+The private request compiler maps a complete validated create request to the
+closed `protocol-child-v1` command: one mode and eighteen ordered flags. It
+preserves null model and effort expectations and translates the validated
+`sha256:` fragment digest into the command's bare hexadecimal representation.
+It constructs no environment, opens no executable and grants no admission.
+The final two flags are paired nullable member selectors. Their retained-record
+path rechecks the same source, record revision and exact operation before and
+after constructing them. Request fields or ambient identity cannot replace that
+origin. This is still only the record conjunct of full runtime admission.
+
+The separate deployment-environment reader accepts exactly `HOME`, `PATH`,
+`TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME`, `SHELL` and
+`CURATOR_HOME`. Every other name refuses; no foreign field is scrubbed followed
+by continuation. It requires the real operator home from user-database metadata
+and a nonempty configured path. It never enumerates the Host environment or
+reads a credential payload. Independent installation/deployment configuration
+admission remains necessary; accepted names alone do not prove it.
+
+The initial command cannot represent native resume, a native tail, child
+environment overrides, service tier, weights, credential-source selection,
+request-specific prompt/sandbox/memory/goal changes or detached execution.
+Such requests refuse before command construction rather than silently losing
+their semantics. Launcher policy resolution, actual executable custody, the
+single-use operation claim, native initialization and the real controller
+correlation remain separate requirements before notification preparation.
+
 ## Verification
 
 Run on macOS with the project's Go toolchain and cgo available:
 
 ```sh
 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 \
-  -run '^TestManager|^TestMemberOperation|^TestMemberRecord|^TestContinuingOwner|^TestManagedNotification|^TestNotificationStream|^TestNotificationJournal' \
+  -run '^TestProtocolChild|^TestManager|^TestMemberOperation|^TestMemberRecord|^TestContinuingOwner|^TestManagedNotification|^TestNotificationStream|^TestNotificationJournal' \
   ./internal/sessionhost ./manager
 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go vet -p 1 ./internal/sessionhost
 ```
@@ -150,3 +240,13 @@ digest/profile/workflow mismatch, duplicate and oversized output, nonzero exit,
 cancellation, missing provider, refused preparation, callback-before-return,
 invalid completion, terminal origin drift and close during bootstrap. They do
 not invoke real Core resolution, open a native home or enroll a live provider.
+
+Protocol-child request tests use the published wire vectors and literal expected
+arguments. They check null/explicit selectors, every permission provenance,
+otherwise valid unsupported semantics, strict request framing, bounded values
+and argv separation. Retained-member tests use owned inert Host/record fixtures
+to reject foreign sources, changed request bytes and observed record drift.
+Environment tests pair the explicit baseline with unknown, duplicate, malformed
+and synthetic identity/home/session/credential variables, singly and together.
+They do not exercise a Launcher binary, resolve policy or establish complete
+operation, executable or native runtime admission.

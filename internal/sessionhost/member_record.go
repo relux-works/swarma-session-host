@@ -47,12 +47,14 @@ type memberRecord struct {
 	Notification *memberNotificationInput `json:"notification"`
 }
 
-// memberRecordSource is created only by the actual continuing owner, from its
-// composition-selected directory. No request, environment or Source root is
-// consulted here. The retained root restricts every later lookup to this source.
+// memberRecordSource is created by an actual continuing Host owner or its
+// concrete pre-child manager lifetime, from a composition-selected directory.
+// No request, environment or Source root is consulted here. The retained root
+// restricts every later lookup to this source; neither lifetime grants admission.
 // This is an optimistic current-record observation, not a writer exclusion lock.
 type memberRecordSource struct {
 	owner    *continuingHostOwner
+	preChild *preChildManager
 	path     string
 	root     *os.Root
 	identity os.FileInfo
@@ -89,21 +91,12 @@ func canonicalRecordDirectory(path string) bool {
 }
 
 func (o *continuingHostOwner) openMemberRecordSource(directory string) (*memberRecordSource, error) {
-	if o == nil || o.checkCurrentHost(o.host) != nil || !canonicalRecordDirectory(directory) {
+	if o == nil || o.checkCurrentHost(o.host) != nil {
 		return nil, errMemberRecordUnavailable
 	}
-	before, err := os.Lstat(directory)
-	if err != nil || !recordInfoSafe(before, true) {
-		return nil, errMemberRecordUnavailable
-	}
-	root, err := os.OpenRoot(directory)
+	s, err := openPhysicalMemberRecordSource(directory, o, nil)
 	if err != nil {
-		return nil, errMemberRecordUnavailable
-	}
-	s := &memberRecordSource{owner: o, path: directory, root: root, identity: before, done: make(chan struct{}), records: make(map[*retainedMemberRecord]struct{})}
-	if !s.current() {
-		_ = root.Close()
-		return nil, errMemberRecordUnavailable
+		return nil, err
 	}
 	go func() {
 		select {
@@ -115,10 +108,47 @@ func (o *continuingHostOwner) openMemberRecordSource(directory string) (*memberR
 	return s, nil
 }
 
+// Only the two concrete lifetime owners construct a physical source. A
+// pre-child owner does not impersonate an already-open Host or gain admission.
+func openPhysicalMemberRecordSource(directory string, owner *continuingHostOwner, preChild *preChildManager) (*memberRecordSource, error) {
+	if (owner == nil) == (preChild == nil) || !canonicalRecordDirectory(directory) {
+		return nil, errMemberRecordUnavailable
+	}
+	before, err := os.Lstat(directory)
+	if err != nil || !recordInfoSafe(before, true) {
+		return nil, errMemberRecordUnavailable
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return nil, errMemberRecordUnavailable
+	}
+	s := &memberRecordSource{owner: owner, preChild: preChild, path: directory, root: root, identity: before, done: make(chan struct{}), records: make(map[*retainedMemberRecord]struct{})}
+	if preChild != nil {
+		// Construction is private and unpublished; establish the exact source
+		// pointer before any currentness check or lifetime watcher can run.
+		preChild.records = s
+	}
+	if !s.current() {
+		_ = root.Close()
+		return nil, errMemberRecordUnavailable
+	}
+	return s, nil
+}
+
+func (s *memberRecordSource) ownerCurrent() bool {
+	if s == nil || (s.owner == nil) == (s.preChild == nil) {
+		return false
+	}
+	if s.owner != nil {
+		return s.owner.checkCurrentHost(s.owner.host) == nil
+	}
+	return s.preChild.ctx != nil && s.preChild.ctx.Err() == nil && s.preChild.records == s
+}
+
 // Caller holds s.mu after construction. Check both the retained directory and
 // its original canonical pathname: an identical replacement is still foreign.
 func (s *memberRecordSource) current() bool {
-	if s == nil || s.closed || s.root == nil || s.owner == nil || s.owner.checkCurrentHost(s.owner.host) != nil || !canonicalRecordDirectory(s.path) {
+	if s == nil || s.closed || s.root == nil || !s.ownerCurrent() || !canonicalRecordDirectory(s.path) {
 		return false
 	}
 	named, err := os.Lstat(s.path)
@@ -318,7 +348,16 @@ func (s *memberRecordSource) retain(reference string) (*retainedMemberRecord, er
 // Exact physical owner and source pointer checks prevent matching decoded data
 // or a separately opened source from substituting for this retained origin.
 func (r *retainedMemberRecord) recheck(owner *continuingHostOwner, source *memberRecordSource) error {
-	if r == nil || r.source == nil || owner != r.source.owner || source != r.source {
+	if owner == nil || r == nil || r.source == nil || owner != r.source.owner || source != r.source {
+		return errMemberRecordUnavailable
+	}
+	return r.recheckPhysical(source)
+}
+
+// Physical rechecking is shared, while each caller checks its own concrete
+// lifetime identity first. Passing nil as a Host owner never selects this path.
+func (r *retainedMemberRecord) recheckPhysical(source *memberRecordSource) error {
+	if r == nil || r.source == nil || source != r.source {
 		return errMemberRecordUnavailable
 	}
 	s := r.source

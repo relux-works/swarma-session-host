@@ -177,7 +177,7 @@ type managerCustody struct {
 }
 
 func admitManagerCustody(ctx context.Context, op *retainedMemberOperation, data []byte, env []string, read managerCoreRead) (*managerCustody, error) {
-	if ctx == nil || ctx.Err() != nil || op == nil || op.record == nil || read == nil {
+	if ctx == nil || ctx.Err() != nil || op == nil || op.record == nil || op.record.source == nil || read == nil {
 		return nil, errMemberRecordUnavailable
 	}
 	o := op.record.source.owner
@@ -222,7 +222,7 @@ func (c *managerCustody) checkNotificationOwner(h *Host, s notificationSelection
 		return errMemberRecordUnavailable
 	}
 	source := c.operation.record.source
-	if h != source.owner.host || s != c.selection {
+	if source == nil || source.owner == nil || h != source.owner.host || s != c.selection {
 		return errMemberRecordUnavailable
 	}
 	c.mu.Lock()

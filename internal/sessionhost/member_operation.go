@@ -150,7 +150,7 @@ func (s *memberRecordSource) retainOperation(kind string, data []byte) (*retaine
 	r.workspace = f
 	s.mu.Unlock()
 	o := &retainedMemberOperation{record: r, request: q, kind: kind, digest: sha256.Sum256(data), workspace: f, workspaceIdentity: info, workspacePath: requestPath}
-	if o.recheck(s.owner, s, kind, data) != nil {
+	if o.recheckPhysical(s, kind, data) != nil {
 		return fail()
 	}
 	return o, nil
@@ -159,7 +159,14 @@ func (s *memberRecordSource) retainOperation(kind string, data []byte) (*retaine
 // Rechecks exact operation bytes as well as current independently retained
 // origin. Canonical-equivalent replacement input is still a different request.
 func (o *retainedMemberOperation) recheck(owner *continuingHostOwner, source *memberRecordSource, kind string, data []byte) error {
-	if o == nil || o.record == nil || o.workspace == nil || source == nil || source != o.record.source || owner != source.owner {
+	if owner == nil || source == nil || owner != source.owner {
+		return errMemberRecordUnavailable
+	}
+	return o.recheckPhysical(source, kind, data)
+}
+
+func (o *retainedMemberOperation) recheckPhysical(source *memberRecordSource, kind string, data []byte) error {
+	if o == nil || o.record == nil || o.workspace == nil || source == nil || source != o.record.source {
 		return errMemberRecordUnavailable
 	}
 	o.mu.Lock()
@@ -167,7 +174,7 @@ func (o *retainedMemberOperation) recheck(owner *continuingHostOwner, source *me
 	if o.lost || kind != o.kind || sha256.Sum256(data) != o.digest {
 		return errMemberRecordUnavailable
 	}
-	if o.record.recheck(owner, source) == nil {
+	if o.record.recheckPhysical(source) == nil {
 		held, err := o.workspace.Stat()
 		clone, e1 := filepath.EvalSymlinks(o.record.record.Clone)
 		actual, e2 := filepath.EvalSymlinks(o.workspacePath)
