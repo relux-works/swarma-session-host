@@ -148,6 +148,7 @@ type Host struct {
 	notificationBinding *NotificationBinding
 	notificationClosed  bool
 	notificationStream  *notificationAttachment
+	notificationManager *managedNotification
 }
 
 func validNotice(n Notice) bool { return scalar.MatchString(n.ID) && scalar.MatchString(n.Reference) }
@@ -400,9 +401,11 @@ func (h *Host) persistLocked(next State) error {
 	if err := h.store.write(next); err != nil {
 		h.err = err
 		h.state.Fence = "unknown"
+		h.invalidateManagedNotificationLocked()
 		return errors.New("host_storage_unavailable")
 	}
 	h.state = next
+	h.invalidateManagedNotificationLocked()
 	return nil
 }
 

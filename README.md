@@ -19,8 +19,12 @@ no call budget; expiry or a lost response retains any accepted intent as an
 unresolved obligation. A call that expires while waiting for Host admission
 cannot begin a new intent. Persistence admitted before expiry may still finish
 with an unresolved reply. The service has no public activation or CLI caller.
-Broker enrollment, inherited endpoint custody and live notification delivery
-remain unimplemented.
+A private [attachment lifecycle](docs/notification-lifecycle.md) now claims one
+preparation per Host, freezes actual Host identity before endpoint transfer, and
+serializes service installation against terminal loss. It requires admitted
+manager and live broker checks; it has no production implementation of those
+checks or public activation path. Broker enrollment, designated child transfer
+and live notification delivery remain unimplemented.
 A bounded Codex 0.164.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted
@@ -110,6 +114,7 @@ accounts or shared services are accessed.
 | Output consumption fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestConsume|TestProtocolConsume' ./internal/runner ./internal/sessionhost` | Inert child backpressure, absolute offsets, durable consumption, reply-loss and replacement evidence on stdout |
 | Notification codec fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestNotification' ./internal/sessionhost` | Closed wire, bounded framing, correlation and rejection controls on stdout; no native execution |
 | Notification stream fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestNotificationStream' ./internal/sessionhost` | Owned inert Unix socketpairs: serial calls, idle versus call expiry, framing rejection, retained intent and single-attachment controls; no enrollment or native runtime |
+| Inert broker docking fixture | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestSourceNotificationDock' ./internal/sessionhost`; [compiled helper interface](docs/notification-docking-fixture.md) | Host-only setup, acceptance/retry, refusal and cleanup checks; external client docking requires its separately supplied fixture |
 | Cooperative stop fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestCooperativeStop|TestOriginalChildSignalGuards|TestForcedStopAndReapedHandle' ./internal/runner` | Inert owned-child TERM, legacy EOF, retry, cutoff and signal-guard evidence on stdout; no native cleanup claim |
 | Runner identify qualification | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -p 1 -run 'TestIdentify|TestPeerIdentity' ./internal/runner ./internal/localipc` | Strict wire, owned sockets, lifecycle/non-effect and post-reply ordering fixtures on stdout; external readers remain unqualified |
 | macOS ps | `/bin/ps -p PID -o stat=` in `TestOwnedKernelChildLifecycle` | Non-reaping state observation of the explicitly owned child; no process discovery |

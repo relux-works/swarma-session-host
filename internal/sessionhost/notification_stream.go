@@ -22,28 +22,34 @@ func (h *Host) startNotificationStream(conn *net.UnixConn, binding NotificationB
 		return nil, ErrNotificationUnresolved
 	}
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.startNotificationStreamLocked(conn, binding, timeoutMS)
+}
+
+// Caller holds mu through binding installation, so a facade completion cannot
+// race a terminal lifecycle transition between its check and service admission.
+func (h *Host) startNotificationStreamLocked(conn *net.UnixConn, binding NotificationBinding, timeoutMS int) (<-chan error, error) {
+	if conn == nil {
+		return nil, ErrNotificationUnresolved
+	}
 	if h.notificationStream != nil {
 		owned := h.notificationStream.conn == conn
-		h.mu.Unlock()
 		if !owned {
 			_ = conn.Close()
 		}
 		return nil, ErrNotificationUnresolved
 	}
 	if h.ctx.Err() != nil || h.notificationClosed || timeoutMS < 1 || timeoutMS > 60000 || !binding.valid() || conn.LocalAddr().Network() != "unix" {
-		h.mu.Unlock()
 		_ = conn.Close()
 		return nil, ErrNotificationUnresolved
 	}
 	if err := conn.SetDeadline(time.Time{}); err != nil {
-		h.mu.Unlock()
 		_ = conn.Close()
 		return nil, ErrNotificationUnresolved
 	}
 	h.notificationStream = &notificationAttachment{conn: conn} // Never reset in this lifecycle.
 	h.wg.Add(1)
-	h.mu.Unlock()
-	if err := h.installNotificationBinding(binding); err != nil {
+	if err := h.installNotificationBindingLocked(binding); err != nil {
 		_ = conn.Close()
 		h.wg.Done()
 		return nil, err
