@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -27,6 +28,19 @@ func main() {
 		fail("usage: swarma-session-host serve|request|profile [flags]", 2)
 	}
 	switch os.Args[1] {
+	case "session-manager":
+		if len(os.Args) != 3 {
+			fail("usage: swarma-session-host session-manager describe|launch|resume|status|cancel", 2)
+		}
+		root := os.Getenv("XDG_STATE_HOME")
+		if root == "" {
+			root = filepath.Join(os.Getenv("HOME"), ".local", "state")
+		}
+		if !filepath.IsAbs(root) {
+			fail("session_host_unavailable", 1)
+		}
+		socket := filepath.Join(root, "swarma-session-host", "manager.sock")
+		os.Exit(sessionhost.SelectedManagerRPC(context.Background(), os.Getenv("CURATOR_RUN_PROTOCOL"), os.Args[2], socket, os.Stdin, os.Stdout))
 	case "serve":
 		os.Exit(serve(os.Args[2:]))
 	case "request":

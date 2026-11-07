@@ -1,10 +1,18 @@
 package sessionhost
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -47,6 +55,122 @@ func TestPrivateCompositionMissingDependency(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Interval admission belongs to composition, before state reservation and the
+// later runner-config checks. The successful composition below is its neighbor.
+func TestPrivateCompositionInvalidIntervalsBeforeEffects(t *testing.T) {
+	for _, field := range []string{"ready", "poll", "ioTimeout"} {
+		for _, bound := range []struct {
+			name  string
+			value time.Duration
+		}{{"zero", 0}, {"over-minute", time.Minute + time.Nanosecond}} {
+			t.Run(field+"/"+bound.name, func(t *testing.T) {
+				cfg, _, body, _, _ := t4CompositionFixture(t)
+				// Mark an actual launcher invocation, including one later cleaned up.
+				marker := filepath.Join(filepath.Dir(cfg.stateDir), "child-started")
+				script, err := os.ReadFile(cfg.launcher.binary)
+				if err != nil {
+					t.Fatal(err)
+				}
+				script = []byte("#!/bin/sh\n: > '" + strings.ReplaceAll(marker, "'", "'\\''") + "'\n" + strings.TrimPrefix(string(script), "#!/bin/sh\n"))
+				if err := os.WriteFile(cfg.launcher.binary, script, 0700); err != nil {
+					t.Fatal(err)
+				}
+				sum := sha256.Sum256(script)
+				cfg.launcher.sha256 = hex.EncodeToString(sum[:])
+				cfg.coreEnvironment = []string{"LANG=C"}
+				switch field {
+				case "ready":
+					cfg.ready = bound.value
+				case "poll":
+					cfg.poll = bound.value
+				case "ioTimeout":
+					cfg.ioTimeout = bound.value
+				}
+				// Rebind the fixture policy so a stale configuration digest cannot
+				// mask a missing early duration check.
+				singleTrustPolicyFixture(t, cfg, fixtureGrant())
+				retained := cfg
+				retained.launcher.environment = append([]string(nil), cfg.launcher.environment...)
+				retained.coreEnvironment = append([]string(nil), cfg.coreEnvironment...)
+				retainedBody := bytes.Clone(body)
+				before := privateCompositionInputSnapshot(t, cfg)
+				var sourceCalls, coreCalls atomic.Int32
+				deps := privateCompositionDependencies{
+					source: bridgeBrokerFixture{prepare: func(context.Context, ManagerOrigin) (PreparedNotificationBroker, error) {
+						sourceCalls.Add(1)
+						return nil, errPrivateComposition
+					}},
+					core: func(context.Context, string, []string, ...string) ([]byte, error) {
+						coreCalls.Add(1)
+						return nil, errPrivateComposition
+					},
+				}
+				// Let any ticker panic fail the test; do not recover it as refusal.
+				r, err := openPrivateComposition(context.Background(), context.Background(), time.Now().Add(10*time.Second), cfg, deps, "launch", body)
+				if r != nil {
+					t.Cleanup(func() { _ = r.close(context.Background()) })
+					t.Error("invalid interval returned a runtime")
+				}
+				if !errors.Is(err, errPrivateComposition) {
+					t.Errorf("invalid interval refusal: %v", err)
+				}
+				for _, path := range []string{cfg.stateDir, cfg.socket, marker} {
+					if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+						t.Errorf("invalid interval created resource %s: %v", path, err)
+					}
+				}
+				if sourceCalls.Load() != 0 || coreCalls.Load() != 0 {
+					t.Error("invalid interval reached Source or Core")
+				}
+				if !reflect.DeepEqual(cfg, retained) || !bytes.Equal(body, retainedBody) {
+					t.Error("invalid interval changed retained configuration or body")
+				}
+				if !reflect.DeepEqual(before, privateCompositionInputSnapshot(t, cfg)) {
+					t.Error("invalid interval changed retained files or created a footprint")
+				}
+			})
+		}
+	}
+}
+
+// Include the policy, pinned launcher and record tree, as well as any new entry.
+func privateCompositionInputSnapshot(t *testing.T, cfg privateCompositionConfig) map[string]struct {
+	mode fs.FileMode
+	data string
+} {
+	t.Helper()
+	snapshot := make(map[string]struct {
+		mode fs.FileMode
+		data string
+	})
+	for _, root := range []string{filepath.Dir(cfg.stateDir), cfg.records} {
+		if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			var data []byte
+			if !entry.IsDir() {
+				data, err = os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+			}
+			snapshot[path] = struct {
+				mode fs.FileMode
+				data string
+			}{info.Mode(), string(data)}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return snapshot
 }
 
 // An abandoned close waiter cannot release custody early or stop the actual

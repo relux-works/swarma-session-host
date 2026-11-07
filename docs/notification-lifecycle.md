@@ -206,6 +206,14 @@ their semantics. Launcher policy resolution, actual executable custody, the
 single-use operation claim, native initialization and the real controller
 correlation remain separate requirements before notification preparation.
 
+The [selected manager handler](selected-manager-handler.md) retains ordinary
+operation admission and a continuing Host owner across short requests. It uses
+the configured broker interfaces without public proof constructors or new request
+fields. Its acceptance adapters are inert. The productive ordinary execution
+owner, concrete provider adapter, designated child transfer and native use still
+require integration and qualification. This local lifecycle alone does not make
+a session launchable through the Host.
+
 ## Verification
 
 Run on macOS with the project's Go toolchain and cgo available:

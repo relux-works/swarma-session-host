@@ -48,8 +48,19 @@ never infers execution phase from stderr or an exit code. The runner now owns
 an optional separate stderr collector with that fixed classifier, including
 joined cleanup and observations of its actual child PID, Wait and stderr EOF.
 The ordinary operation can derive its fixed runner configuration once; that
-data still grants no execution authority. Selected-handler start admission,
-native initialization and controller ownership transfer remain pending.
+data still grants no execution authority. Productive ordinary execution, native
+initialization and controller ownership transfer remain integration and
+qualification work.
+
+A private [attachment lifecycle](docs/notification-lifecycle.md) now claims one
+preparation per Host, freezes actual Host identity before endpoint transfer, and
+serializes service installation against terminal loss. It requires admitted
+manager and live broker checks. The [selected manager handler](docs/selected-manager-handler.md)
+now retains ordinary admission and durable operation correlation around the
+continuing manager, with an executable plugin transport and inert acceptance
+adapters. No productive ordinary owner or provider default is installed.
+Broker enrollment, designated child transfer and live notification delivery
+remain unqualified.
 A bounded Codex 0.164.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted
