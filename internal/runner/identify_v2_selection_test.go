@@ -1,10 +1,68 @@
 package runner
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
+	"net"
 	"os"
 	"testing"
+	"time"
 )
+
+// V2 is a recognized wire schema even when Linux identity was not selected.
+// Refuse proof explicitly on both Linux and Darwin without dispatching a
+// pipelined controller operation or disclosing instance/child identity.
+func TestIdentifyV2NonselectedWireOneShot(t *testing.T) {
+	cfg := testConfig(t, "echo")
+	// Keep periodic observation from turning the expected refusal into busy.
+	release := make(chan struct{})
+	s, err := startWithReaperGate(cfg, captureChildBirth, waitOriginalChild, func() { <-release })
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	defer func() { close(release); _ = s.Close() }()
+	trackTestRunner(t, s)
+	b, err := encodeIdentifyV2(IdentifyV2Request{identifyRequestSchemaV2, cfg.Execution, s.instance})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: cfg.Socket, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	pipeline := append(bytes.Clone(b), []byte("{\"op\":\"stop\",\"execution\":\""+cfg.Execution+"\",\"epoch\":1}\n")...)
+	if _, err := c.Write(pipeline); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(c)
+	wire, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := decodeIdentifyV2Response(wire)
+	if err != nil || r.Schema != identifyResponseSchemaV2 || r.Execution != cfg.Execution || r.Result != "unavailable" ||
+		r.Reason == nil || *r.Reason != "unsupported_platform" || r.Instance != nil || r.Child != nil {
+		t.Fatalf("nonselected v2 response: %+v %v", r, err)
+	}
+	if rest, err := reader.ReadBytes('\n'); err == nil || len(rest) != 0 {
+		t.Fatalf("v2 one-shot: %q %v", rest, err)
+	}
+	s.mu.Lock()
+	inert := s.owner == nil && s.epoch == 0 && s.seq == 0 && !s.blocked && len(s.writes) == 0 && !s.isClosedLocked() && !s.cfg.IdentifyV2
+	s.mu.Unlock()
+	if !inert {
+		t.Fatal("nonselected v2 changed controller state")
+	}
+	controller := testClient(t, cfg)
+	call(t, controller, Request{Op: "claim", Execution: cfg.Execution, Epoch: 1}, "ok")
+	call(t, controller, Request{Op: "write", Execution: cfg.Execution, Epoch: 1, Sequence: 1, Data: []byte("after")}, "written")
+}
 
 func TestIdentifyV2SelectionBeforeListen(t *testing.T) {
 	for _, failure := range []error{errChildBirthUnsupported, errChildBirthUnavailable} {

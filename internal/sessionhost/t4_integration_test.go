@@ -29,6 +29,12 @@ func t4CompositionFixture(t *testing.T) (privateCompositionConfig, createPolicy,
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
+	// Keep the short socket path, but use the physical spelling required by
+	// the launcher and policy guards (Darwin's /tmp is a symlink).
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

@@ -29,6 +29,12 @@ func nativeCorrelationFixture(t *testing.T) (*ordinaryWireOperation, *runner.Ser
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	// Keep the short socket path, but use the physical spelling required by
+	// the launcher guard (Darwin's /tmp is a symlink).
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

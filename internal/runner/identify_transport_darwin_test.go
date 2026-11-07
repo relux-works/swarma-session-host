@@ -164,7 +164,7 @@ func TestIdentifyDispatchAndOneShot(t *testing.T) {
 	cases := map[string][]byte{
 		"nonobject": []byte("null\n"), "array": []byte("[]\n"),
 		"hybrid":    bytes.Replace(good, []byte("{"), []byte("{\"op\":\"claim\",\"epoch\":5,"), 1),
-		"version":   bytes.Replace(good, []byte("request-v1"), []byte("request-v2"), 1),
+		"version":   bytes.Replace(good, []byte("request-v1"), []byte("request-v3"), 1),
 		"duplicate": bytes.Replace(good, []byte("{"), []byte("{\"execution\":\"other\","), 1),
 		"oversize":  append(bytes.Repeat([]byte(" "), 1025-len(good)), good...),
 		"missing":   []byte("{\"schema\":\"runner-identify-request-v1\"}\n"),
