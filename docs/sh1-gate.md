@@ -111,6 +111,10 @@ manifest, and original package bytes against original hashes before writes.
 Maps candidate production imports back to the old path, writes production files
 (including non-Go production assets), and leaves `_test.go` and every `testdata/`
 file untouched. Before/after hashes of protected files cover the whole checkout.
+All reverse-projected production bytes must exactly equal their pinned originals,
+including non-Go assets. This check covers the complete proposed projection before
+any checkout write or report publication; a matching candidate manifest alone is
+insufficient. Import spellings that do not round-trip byte-for-byte are refused.
 The report records the source commit, candidate-manifest hash, adapter-table
 hash, production transformations, and protected-file hashes.
 

@@ -445,6 +445,11 @@ func project(root, checkout, pkg, commit, adapters, report string) error {
 				return e
 			}
 		}
+		// A valid candidate manifest alone does not prove that projecting back
+		// preserves production. Check every file before the first checkout write.
+		if !bytes.Equal(b, original[r.Path]) {
+			return fmt.Errorf("projected production bytes differ from pinned source: %s", r.Path)
+		}
 		next[r.Path] = b
 	}
 	ab, e := os.ReadFile(adapters)
