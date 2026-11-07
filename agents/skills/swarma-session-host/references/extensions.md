@@ -29,6 +29,30 @@ ID/reference/selection, partial/malformed acknowledgement and unknown/replacemen
 refusal. These fixtures are inspected examples, not executed qualification.
 [C08](evidence.md#c08) [C10](evidence.md#c10)
 
+### In-memory construction example
+
+Run the [compiled adapter example](../scripts/adapter-example.go) from the
+repository root with the local Go toolchain:
+
+```sh
+GOTOOLCHAIN=local GOWORK=off GOPROXY=off GOSUMDB=off go run ./agents/skills/swarma-session-host/scripts/adapter-example.go
+```
+
+It implements the existing `Adapter` seam by embedding the landed line codec,
+supplying a local input-state observation and assigning the value to
+`Config.Adapter`. It checks a matching acknowledgement beside a different-model
+refusal, an incomplete frame and malformed output. Missing idle evidence stays
+unknown. Only the matching full intent may return applied: a wrong model cannot
+prove this selection was applied, and a frame without LF is incomplete evidence.
+
+This example only constructs configuration and inspects bytes in memory. It
+opens no Host, socket or child and needs no credentials, native runtime or model.
+The new name is not a CLI adapter: `serve -adapter example-fixture` returns
+`unsupported_adapter` before reserving an endpoint because the serve switch has
+no such construction branch. Do not add a plugin manifest or treat assignment
+as launch admission. Host delivery still needs the separately configured runner,
+private state and readiness gates described above. [C19](evidence.md#c19)
+
 ## Native protocol drivers
 
 Implement `adapterprotocol.Driver` with `Descriptor`, `Begin`, `Prepare`,

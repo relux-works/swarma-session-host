@@ -25,36 +25,8 @@ jobs:
         with:
           go-version: '1.25.5'
           cache: false
-      - name: Vet and test
-        shell: bash
-        run: |
-          # Both checks run even when the first one fails.
-          set +e
-          run_check() {
-            python3 -c '
-          import os, sys, time
-          deadline = time.monotonic() + 120
-          while True:
-              load = os.getloadavg()[0]
-              print("start load 1m:", load, flush=True)
-              if load < 20:
-                  sys.exit(0)
-              if time.monotonic() >= deadline:
-                  sys.exit(125)
-              time.sleep(5)
-          '
-            load_status=$?
-            if [ "$load_status" -ne 0 ]; then
-              printf 'check unavailable: start load could not be admitted\n'
-              return 125
-            fi
-            "$@"
-          }
-          run_check go vet -p 1 ./...
-          vet_status=$?
-          run_check go test -p 1 -race -count=1 -timeout=5m ./...
-          test_status=$?
-          printf 'go vet exit: %s\ngo test exit: %s\n' "$vet_status" "$test_status"
-          if [ "$vet_status" -ne 0 ] || [ "$test_status" -ne 0 ]; then
-            exit 1
-          fi
+      - name: Check workflow result classification
+        run: python3 -m unittest discover -s tools/ci -p 'test_module_checks.py' -v
+      # Admission exhaustion remains non-green; it is not a product-test failure.
+      - name: Vet and test (125 means infrastructure unavailable)
+        run: python3 tools/ci/module_checks.py
