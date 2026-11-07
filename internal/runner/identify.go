@@ -84,6 +84,17 @@ func (s *Server) handleIdentify(conn *net.UnixConn, frame []byte, accepted time.
 	if conn.SetDeadline(deadline) != nil {
 		return
 	}
+	// Dispatch only the explicitly selected schema; a v2 refusal never retries v1.
+	var offer struct {
+		Schema string `json:"schema"`
+	}
+	if json.Unmarshal(frame, &offer) != nil {
+		return
+	}
+	if offer.Schema == identifyRequestSchemaV2 {
+		s.handleIdentifyV2(conn, frame, deadline)
+		return
+	}
 	req, err := decodeIdentifyRequest(frame)
 	if err != nil {
 		return

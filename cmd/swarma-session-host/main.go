@@ -24,16 +24,38 @@ func fail(code string, exit int) {
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: swarma-session-host serve|request [flags]", 2)
+		fail("usage: swarma-session-host serve|request|profile [flags]", 2)
 	}
 	switch os.Args[1] {
 	case "serve":
 		os.Exit(serve(os.Args[2:]))
 	case "request":
 		request(os.Args[2:])
+	case "profile":
+		os.Exit(profile(os.Args[2:]))
 	default:
 		fail("unknown_command", 2)
 	}
+}
+
+// Reporting is execution-free. It does not install a public runtime route or
+// satisfy the private composition's Source and Linux identity cutover gates.
+func profile(args []string) int {
+	flags := flag.NewFlagSet("profile", flag.ContinueOnError)
+	name := flags.String("name", "", "explicit runtime profile")
+	backend := flags.String("backend", "", "explicit launcher backend")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return 2
+	}
+	report, err := sessionhost.DescribeRuntimeProfile(*name, *backend)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	if json.NewEncoder(os.Stdout).Encode(report) != nil {
+		return 1
+	}
+	return 0
 }
 
 func serve(args []string) int {

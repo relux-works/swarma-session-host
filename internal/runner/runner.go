@@ -42,6 +42,12 @@ type Config struct {
 	Plan       Plan
 	IOTimeout  time.Duration
 	StopSignal string
+	// IdentifyV2 explicitly selects Linux pidfs capture before Listen. Immutable
+	// for this Start; the zero value retains the ordinary controller/v1 path.
+	IdentifyV2 bool
+	// Empty preserves discarded stderr. The only other admitted mode is
+	// ProtocolChildDiagnostics; no callback receives raw child diagnostics.
+	Diagnostics string
 }
 
 type Request struct {
@@ -90,6 +96,7 @@ type Server struct {
 	processMu    sync.Mutex
 	pid          int
 	original     originalChild
+	linux        linuxOriginal
 	childState   childOwnership
 	stdin        childInput
 	stdout       io.ReadCloser
@@ -118,6 +125,11 @@ type Server struct {
 	waitUnknown  bool
 	exitCode     int
 
+	stderr                              *os.File
+	diagnostic                          *LauncherDiagnostic
+	diagnosticDone                      chan struct{}
+	diagnosticEnded, diagnosticComplete bool // guarded by mu
+
 	cooperativeStopOnce sync.Once
 	cooperativeStopCode string
 
@@ -144,12 +156,27 @@ func startWithChildLifecycle(cfg Config, capture func(int) (childBirth, error), 
 // A qualification-only gate runs before the first lifecycle lock acquisition;
 // ordinary start always passes nil and ownership/reap semantics stay unchanged.
 func startWithReaperGate(cfg Config, capture func(int) (childBirth, error), wait childWaiter, beforeReap func()) (*Server, error) {
+	return startWithPreflight(cfg, capture, wait, beforeReap, preflightIdentifyV2)
+}
+
+// Per-Start dependency for qualification; no process-global capability cache or
+// mutable selection. Production always supplies the platform preflight.
+func startWithPreflight(cfg Config, capture func(int) (childBirth, error), wait childWaiter, beforeReap func(), preflight func() error) (*Server, error) {
 	if cfg.Execution == "" || len(cfg.Execution) > 128 || cfg.IOTimeout <= 0 || cfg.IOTimeout > time.Minute ||
 		!filepath.IsAbs(cfg.Plan.Binary) || !filepath.IsAbs(cfg.Plan.Cwd) || cfg.Plan.Env == nil || len(cfg.Plan.Args) > 32 ||
 		(cfg.StopSignal != "" && cfg.StopSignal != "none" && cfg.StopSignal != "term") {
 		return nil, errors.New("invalid_runner_plan")
 	}
-	// Bind before child creation: an occupied endpoint must have no spawn effect.
+	if cfg.Diagnostics != "" && cfg.Diagnostics != ProtocolChildDiagnostics {
+		return nil, errors.New("invalid_runner_plan")
+	}
+	if cfg.IdentifyV2 {
+		if err := preflight(); err != nil {
+			return nil, errors.New("child_start_failed")
+		}
+	}
+	// Bind before workload creation: an occupied endpoint must have no workload
+	// spawn effect. A selected inert preflight has already completed cleanup.
 	listener, err := localipc.Listen(cfg.Socket)
 	if err != nil {
 		return nil, err
@@ -172,7 +199,12 @@ func startWithReaperGate(cfg Config, capture func(int) (childBirth, error), wait
 		return nil, errors.New("child_pipe_failed")
 	}
 	defer childOut.Close()
-	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	var stderr, stderrRead *os.File
+	if cfg.Diagnostics == ProtocolChildDiagnostics {
+		stderrRead, stderr, err = os.Pipe()
+	} else {
+		stderr, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	}
 	if err != nil {
 		stdin.Close()
 		stdout.Close()
@@ -180,7 +212,13 @@ func startWithReaperGate(cfg Config, capture func(int) (childBirth, error), wait
 		return nil, errors.New("child_pipe_failed")
 	}
 	defer stderr.Close()
-	process, err := os.StartProcess(cfg.Plan.Binary, append([]string{cfg.Plan.Binary}, cfg.Plan.Args...),
+	started := false
+	defer func() {
+		if !started && stderrRead != nil {
+			_ = stderrRead.Close()
+		}
+	}()
+	process, linux, err := startOriginalProcess(cfg.IdentifyV2, cfg.Plan.Binary, append([]string{cfg.Plan.Binary}, cfg.Plan.Args...),
 		&os.ProcAttr{Dir: cfg.Plan.Cwd, Env: cfg.Plan.Env, Files: []*os.File{childIn, childOut, stderr}})
 	if err != nil {
 		stdin.Close()
@@ -189,9 +227,15 @@ func startWithReaperGate(cfg Config, capture func(int) (childBirth, error), wait
 		return nil, errors.New("child_start_failed")
 	}
 	original := captureOriginalChild(process.Pid, capture)
-	s := &Server{cfg: cfg, listener: listener, child: process, pid: process.Pid, original: original, childState: childOwned, stdin: stdin, stdout: stdout,
+	s := &Server{cfg: cfg, listener: listener, child: process, pid: process.Pid, original: original, linux: linux, childState: childOwned, stdin: stdin, stdout: stdout,
 		instance: instance, identifySlots: make(chan struct{}, 2), done: make(chan struct{}), outputDone: make(chan struct{}), closed: make(chan struct{}),
 		conns: make(map[*net.UnixConn]bool), writes: make(map[uint64]writeRecord), output: make([]byte, 0, MaxOutput), changed: make(chan struct{}), exitCode: -1}
+	started = true
+	if stderrRead != nil {
+		s.stderr, s.diagnostic, s.diagnosticDone = stderrRead, NewLauncherDiagnostic(), make(chan struct{})
+		s.wg.Add(1)
+		go s.collectLauncherDiagnostics(stderrRead)
+	}
 	s.wg.Add(3)
 	go s.collect(stdout)
 	go func() {
@@ -300,6 +344,10 @@ func (s *Server) reap(wait childWaiter) {
 			s.mu.Lock()
 			s.publishChildWaitLocked(state, status)
 			s.mu.Unlock()
+			if s.linux.release != nil {
+				s.linux.release()
+				s.linux.release = nil
+			}
 			if s.child != nil {
 				s.child.Release()
 			}
@@ -681,7 +729,15 @@ func (s *Server) Close() error {
 			conn.Close()
 		}
 		s.mu.Unlock()
-		if result := s.stop(); result.Code != "stopped" {
+		result := s.stop()
+		// Closing our read handle unblocks the collector even if an inherited
+		// writer outlives the original child. That is incomplete diagnostic
+		// capture, never fabricated EOF or authority over another process.
+		if s.stderr != nil {
+			_ = s.stderr.Close()
+			<-s.diagnosticDone
+		}
+		if result.Code != "stopped" {
 			s.stdout.Close()
 			s.mu.Lock()
 			s.blocked, s.overflow = true, true

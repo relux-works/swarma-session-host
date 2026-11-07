@@ -19,6 +19,7 @@ func main() {
 	flag.StringVar(&cfg.Execution, "execution", "", "explicit fixture execution identifier")
 	flag.DurationVar(&cfg.IOTimeout, "io-timeout", 0, "explicit bounded I/O timeout")
 	flag.StringVar(&cfg.StopSignal, "stop-signal", "none", "owned-child stop signal: none or term; stopped proves only direct-child completion")
+	flag.BoolVar(&cfg.IdentifyV2, "identify-v2", false, "explicitly select Linux pidfs v2 startup qualification")
 	flag.Parse()
 	if flag.NArg() != 0 || localipc.Decode(os.Stdin, &cfg.Plan) != nil {
 		fmt.Fprintln(os.Stderr, "invalid_fixture_plan")
@@ -33,7 +34,7 @@ func main() {
 	}
 	defer s.Close()
 	// Metadata only. Child argv, environment and output are never printed.
-	json.NewEncoder(os.Stdout).Encode(map[string]any{"code": "runner_ready", "runner_pid": os.Getpid(), "child_pid": s.ChildPID(), "execution": cfg.Execution})
+	json.NewEncoder(os.Stdout).Encode(map[string]any{"code": "runner_ready", "identity_profile": runner.IdentifyV2TrustProfile, "runner_pid": os.Getpid(), "child_pid": s.ChildPID(), "execution": cfg.Execution})
 	<-ctx.Done()
 	if err := s.Close(); err != nil {
 		json.NewEncoder(os.Stderr).Encode(map[string]any{"code": "runner_stop_unknown", "child_pid": s.ChildPID()})

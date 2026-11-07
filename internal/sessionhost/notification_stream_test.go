@@ -387,7 +387,8 @@ func TestNotificationStreamExpiryClosesBeforeStateLock(t *testing.T) {
 }
 
 // Observe only this inert test process's goroutine metadata. Retain no stack
-// payload: the witness must show the decoded stream handler waiting for mu,
+// payload: the witness must show the decoded stream handler waiting for mu
+// at either the custody observation or request admission (both follow decode),
 // rather than merely bytes buffered in a socket or an incomplete request.
 func notificationQueuedHandler(t *testing.T) {
 	t.Helper()
@@ -403,7 +404,6 @@ func notificationQueuedHandler(t *testing.T) {
 		}
 		for _, block := range strings.Split(string(buf[:n]), "\n\n") {
 			if strings.Contains(block, "[sync.Mutex.Lock") &&
-				strings.Contains(block, "(*Host).notificationRequest") &&
 				strings.Contains(block, "(*Host).notificationStreamExchange") {
 				t.Log("queue witness: full decoded stream request waiting on Host admission mutex")
 				return
