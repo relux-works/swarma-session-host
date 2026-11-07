@@ -32,7 +32,13 @@ refusal. These fixtures are inspected examples, not executed qualification.
 ### In-memory construction example
 
 Run the [compiled adapter example](../scripts/adapter-example.go) from the
-repository root with the local Go toolchain:
+repository root with local Go 1.25.5, **after** completing the
+[current-composition cache prerequisite](usage.md#current-composition-cache-prerequisite).
+Although the example performs only in-memory work, its `sessionhost` import
+compiles the normal manager core and requires the exact pinned session-manager
+module. Keep the prepared task-owned `HOME`, `TMPDIR`, `GOMODCACHE` and `GOCACHE`
+paths in the cleared, network-isolated environment described there. A cold cache
+must fail rather than fetch dependencies or use a foreign cache:
 
 ```sh
 GOTOOLCHAIN=local GOWORK=off GOPROXY=off GOSUMDB=off go run ./agents/skills/swarma-session-host/scripts/adapter-example.go

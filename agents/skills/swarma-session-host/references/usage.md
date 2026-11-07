@@ -1,17 +1,77 @@
 # Commands and verification
 
 These are documented interfaces to use when execution is separately authorized.
-No command in this guide was run to author the skill. Paths and selection values
-in examples are nonsecret placeholders.
+The original skill commands were source-inspected only; the current-composition
+prerequisites below supplement that historical baseline. Paths and selection
+values in examples are nonsecret placeholders.
 
 ## Build and check from the repository root
 
-The module is `github.com/relux-works/swarma-session-host`, with Go 1.25.5
-and no required dependency modules in `go.mod`. The documented validation
-target is macOS; process observation and race checks need cgo and the Apple C
+The module is `github.com/relux-works/swarma-session-host`, with Go 1.25.5.
+The current composition requires the pinned session-manager module listed below;
+the dependency-free `go.mod` in historical [C02](evidence.md#c02) describes only
+its immutable baseline. The documented validation target is macOS; process observation and race checks need cgo and the Apple C
 toolchain. Python 3 runs the synthetic smoke. Linux UID transport does not
 establish Linux runtime qualification; non-Darwin/non-cgo process observation
 returns `process_observer_unsupported`. [C02](evidence.md#c02)
+
+### Current-composition cache prerequisite
+
+Before any offline build, check or [adapter example](extensions.md#in-memory-construction-example),
+prepare a task-owned cache for the exact requirement in the current
+[go.mod](../../../../go.mod) and [go.sum](../../../../go.sum):
+
+| Module | Exact version | Canonical checksum |
+| --- | --- | --- |
+| `github.com/relux-works/curator-agent-launcher/schemas/session-manager` | `v0.0.0-20261104135218-0da523bc1012` | `h1:66/XTLeQvwXVUyLxvb3p4l0vS3/5r11KPf8+vYC+Z1s=` |
+| Same module's `go.mod` | Same version | `h1:gVV9OQTCR5EItZ1EcETtNyHsGsc52JX+za15xVKaW3M=` |
+
+Use the local **Go 1.25.5** toolchain; `GOTOOLCHAIN=local` must not download or
+upgrade it. Provision it separately if absent. Set an absolute `TASK_ROOT` in
+an owned private directory with trusted ancestors. Give `TASK_ROOT`, `HOME`,
+`TMPDIR`, `GOMODCACHE` and `GOCACHE` mode 0700, with the latter four in separate
+subdirectories below `TASK_ROOT`; export their absolute paths. Do not reuse
+another task's or the host's home/cache. Keep the source and tools read-only
+and the execution environment cleared and network-isolated; expose no host
+home, credentials, keys, agent sockets or live providers.
+
+Dependency acquisition is a separate, explicitly authorized preparation phase,
+not permission for the offline recipe to fetch anything. Acquire only this
+version's `.zip`, `.mod` and `.info` from `https://proxy.golang.org`, and its
+canonical version-specific lookup from `https://sum.golang.org/lookup/`.
+Require both lookup checksum lines to match the table and the tracked `go.sum`.
+Stage those three files under
+`$TASK_ROOT/proxy/github.com/relux-works/curator-agent-launcher/schemas/session-manager/@v/`
+using the exact version as each filename stem. Do not copy a foreign cache,
+use `@latest`, run `go get`/`go mod tidy`, change pins or fetch replacements.
+
+Then populate and verify the task cache from that read-only local proxy in the
+isolated preparation sandbox, before running any product/example command:
+
+```sh
+GOTOOLCHAIN=local GOWORK=off GOPROXY="file://$TASK_ROOT/proxy" GOSUMDB=off \
+  go mod download -json github.com/relux-works/curator-agent-launcher/schemas/session-manager@v0.0.0-20261104135218-0da523bc1012
+GOTOOLCHAIN=local GOWORK=off GOPROXY=off GOSUMDB=off go mod verify
+```
+
+Require each command to exit zero. Require the download receipt's exact `Path`
+and `Version` above, no `Error`, and `Sum`/`GoModSum` equal to the two canonical
+`h1:` values; any missing or mismatched value refuses execution. Go checks the
+archive's canonical module hash and the module-file hash against `go.sum`;
+a ZIP SHA-256 alone is not that check. `go mod verify` additionally checks the
+prepared cache's content. `GOSUMDB=off` here does not verify a signed sumdb
+checkpoint and does not authorize an unverified download. Keep the receipt and
+check that tracked `go.mod`/`go.sum` remain unchanged.
+
+For subsequent offline commands, export `GOTOOLCHAIN=local`, `GOWORK=off`,
+`GOPROXY=off` and `GOSUMDB=off`, retaining the same private cache paths. An empty
+cache must refuse with module lookup disabled; do not enable network lookup,
+fall back to a host cache or upgrade a dependency to make it pass. Prepared-cache
+success proves only that command's local synthetic behavior, not launch,
+provider, selected-manager or native-runtime qualification. Historical evidence
+locators and hashes in [evidence.md](evidence.md) remain unchanged.
+
+### Build and check commands
 
 ```sh
 mkdir -p .temp/prototype/bin .temp/prototype/evidence
