@@ -450,8 +450,8 @@ with 60 module-graph rows and all proxy hashes. No candidate replacement is
 present; two unrelated retained-library replacements keep their documented
 prototype role. Tests needing board-internal access remain in lane 1. Artifacts
 contain only allowlisted JSON reports, never board/candidate/proxy/cache bytes
-or raw logs. Outcomes `TASK-261010-3uprc3_rework-hosted-reports.json` and
-`TASK-261010-3uprc3_rework-logbook.md` retain all reports and every failure.
+or raw logs. The historical rework report collection and
+historical rework logbook retain all reports and every failure.
 
 The first rework attempt [38032951891](https://github.com/relux-works/swarma-session-host/actions/runs/38032951891)
 used signed snapshot `b97f1a5c5edd78349318d5b4f110e97d057e9b4c`
@@ -500,7 +500,7 @@ module is present. The board's two original, unrelated library replacements
 remain documented in the hosted lane contract; this is a prototype retained
 dependency graph, not dependency-exit or released-module proof.
 
-All command exits are in the task outcome `TASK-261010-3uprc3_hosted-reports.json` and run JSON artifacts. The tooling commands `python3 -m unittest discover -s tools/sh1/ci -p 'test_*.py' -v`, format checks, `go vet ./tools/sh1/...`, `go test -v -race -count=1 ./tools/sh1/...` and `go build ./tools/sh1/...` exit 0 on both platforms for snapshot 3; the helper suite has eight tests. Its malformed-event child intentionally exits 7, and the regression verifies that exit is retained. Consumer proxy preparation, `go build ./...` and `go vet ./...` exit 0 for all three snapshots. No test, build or vet command runs on the development host.
+All command exits are in the historical lane 1 and 2 report collection and run JSON artifacts. The tooling commands `python3 -m unittest discover -s tools/sh1/ci -p 'test_*.py' -v`, format checks, `go vet ./tools/sh1/...`, `go test -v -race -count=1 ./tools/sh1/...` and `go build ./tools/sh1/...` exit 0 on both platforms for snapshot 3; the helper suite has eight tests. Its malformed-event child intentionally exits 7, and the regression verifies that exit is retained. Consumer proxy preparation, `go build ./...` and `go vet ./...` exit 0 for all three snapshots. No test, build or vet command runs on the development host.
 
 | Run / snapshot | macOS projection | Ubuntu projection | Ubuntu consumer | Tooling Ubuntu / macOS |
 | --- | --- | --- | --- | --- |
