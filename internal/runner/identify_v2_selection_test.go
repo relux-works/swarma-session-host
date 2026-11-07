@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"testing"
@@ -50,7 +51,7 @@ func TestIdentifyV2NonselectedWireOneShot(t *testing.T) {
 		r.Reason == nil || *r.Reason != "unsupported_platform" || r.Instance != nil || r.Child != nil {
 		t.Fatalf("nonselected v2 response: %+v %v", r, err)
 	}
-	if rest, err := reader.ReadBytes('\n'); err == nil || len(rest) != 0 {
+	if rest, err := reader.ReadBytes('\n'); !identifyV2PeerClosed(rest, err) {
 		t.Fatalf("v2 one-shot: %q %v", rest, err)
 	}
 	s.mu.Lock()
@@ -62,6 +63,54 @@ func TestIdentifyV2NonselectedWireOneShot(t *testing.T) {
 	controller := testClient(t, cfg)
 	call(t, controller, Request{Op: "claim", Execution: cfg.Execution, Epoch: 1}, "ok")
 	call(t, controller, Request{Op: "write", Execution: cfg.Execution, Epoch: 1, Sequence: 1, Data: []byte("after")}, "written")
+}
+
+func identifyV2PeerClosed(rest []byte, err error) bool {
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		return false
+	}
+	return err == io.EOF && len(rest) == 0
+}
+
+func TestIdentifyV2PeerClosureControls(t *testing.T) {
+	for _, closed := range []bool{true, false} {
+		name := "still-open-timeout"
+		if closed {
+			name = "closed-peer"
+		}
+		t.Run(name, func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer client.Close()
+			defer peer.Close()
+			if err := client.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			if closed {
+				if err := peer.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rest, err := bufio.NewReader(client).ReadBytes('\n')
+			if closed {
+				if err != io.EOF || len(rest) != 0 {
+					t.Fatalf("closed peer: %q %v", rest, err)
+				}
+			} else if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() || len(rest) != 0 {
+				t.Fatalf("still-open peer: %q %v", rest, err)
+			}
+			if got := identifyV2PeerClosed(rest, err); got != closed {
+				t.Fatalf("peer closed = %t, want %t: %q %v", got, closed, rest, err)
+			}
+		})
+	}
+	for _, err := range []error{nil, errors.New("unrelated read failure"), io.ErrUnexpectedEOF} {
+		if identifyV2PeerClosed(nil, err) {
+			t.Fatalf("accepted non-EOF error: %v", err)
+		}
+	}
+	if identifyV2PeerClosed([]byte("extra"), io.EOF) {
+		t.Fatal("accepted remaining bytes at EOF")
+	}
 }
 
 func TestIdentifyV2SelectionBeforeListen(t *testing.T) {
