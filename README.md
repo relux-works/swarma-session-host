@@ -7,6 +7,12 @@ model and reasoning selections are opaque strings, with no model catalog in
 host core.
 
 **Current scope: M2 Codex protocol prototype and M3-S synthetic admission.**
+
+A [private T4 composition and tagged Linux executable](docs/t4-private-runtime.md)
+now run retained T1 creation, T2 handoff and notification-manager cleanup with
+explicit injected dependencies. Its runnable target uses inert Source/Core/native
+fakes and does not select production caller authority, Source activation or
+Host restart adoption.
 A separate `curator-host-notification/1` codec validates bounded notification
 requests and correlated responses. Private Host-core primitives persist matching
 notification intents and exact retry correlation in state version 4, with count,
@@ -19,12 +25,31 @@ no call budget; expiry or a lost response retains any accepted intent as an
 unresolved obligation. A call that expires while waiting for Host admission
 cannot begin a new intent. Persistence admitted before expiry may still finish
 with an unresolved reply. The service has no public activation or CLI caller.
-A private [attachment lifecycle](docs/notification-lifecycle.md) now claims one
-preparation per Host, freezes actual Host identity before endpoint transfer, and
-serializes service installation against terminal loss. It requires admitted
-manager and live broker checks; it has no production implementation of those
-checks or public activation path. Broker enrollment, designated child transfer
-and live notification delivery remain unimplemented.
+The optional [manager/broker seam](docs/notification-lifecycle.md) retains one
+actual Host across requests under an explicit finite lifetime. It independently
+reads the configured member record and selected Core workflow/profile, checks
+launch/resume input against the published schema, and rechecks file identity,
+revision, physical workspace and complete fragment digest before activation.
+A configured broker prepares its actual provider before the Host claims one
+socketpair; its live enrollment callback must match the full binding before
+service installation. Missing broker or failed admission refuses.
+The public Go entry is `manager.Open`; resource-only construction supplies no
+ordinary launch/resume admission and therefore cannot activate a broker. That
+admission must come from the actual selected manager handler. This is a composition API, with no new
+listener or manager wire endpoint. The optional provider adapter, selected
+manager wire-handler docking, designated provider child transfer and productive
+native notification use still require integration and qualification.
+Private ordinary-method preparation now connects complete published requests
+to retained pre-child member records, a configured Launcher file/digest and
+the closed environment baseline. Its consumed plan is copied data; it starts
+no child and grants no production admission. Executable drift and duplicate
+attempts refuse. The bounded diagnostic sink retains fixed labels only and
+never infers execution phase from stderr or an exit code. The runner now owns
+an optional separate stderr collector with that fixed classifier, including
+joined cleanup and observations of its actual child PID, Wait and stderr EOF.
+The ordinary operation can derive its fixed runner configuration once; that
+data still grants no execution authority. Selected-handler start admission,
+native initialization and controller ownership transfer remain pending.
 A bounded Codex 0.164.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted
@@ -115,6 +140,7 @@ accounts or shared services are accessed.
 | Notification codec fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestNotification' ./internal/sessionhost` | Closed wire, bounded framing, correlation and rejection controls on stdout; no native execution |
 | Notification stream fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestNotificationStream' ./internal/sessionhost` | Owned inert Unix socketpairs: serial calls, idle versus call expiry, framing rejection, retained intent and single-attachment controls; no enrollment or native runtime |
 | Inert broker docking fixture | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestSourceNotificationDock' ./internal/sessionhost`; [compiled helper interface](docs/notification-docking-fixture.md) | Host-only setup, acceptance/retry, refusal and cleanup checks; external client docking requires its separately supplied fixture |
+| Manager/broker fixtures | `GOMAXPROCS=2 GOWORK=off go test -p 1 -race -count=1 -run '^TestManager|^TestPublicManager' ./internal/sessionhost ./manager` | Owned inert Core subprocess and broker fixtures; correlation, refusal, callback ordering and finite cleanup; no live provider/native call |
 | Cooperative stop fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestCooperativeStop|TestOriginalChildSignalGuards|TestForcedStopAndReapedHandle' ./internal/runner` | Inert owned-child TERM, legacy EOF, retry, cutoff and signal-guard evidence on stdout; no native cleanup claim |
 | Runner identify qualification | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -p 1 -run 'TestIdentify|TestPeerIdentity' ./internal/runner ./internal/localipc` | Strict wire, owned sockets, lifecycle/non-effect and post-reply ordering fixtures on stdout; external readers remain unqualified |
 | macOS ps | `/bin/ps -p PID -o stat=` in `TestOwnedKernelChildLifecycle` | Non-reaping state observation of the explicitly owned child; no process discovery |

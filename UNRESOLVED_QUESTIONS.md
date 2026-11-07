@@ -12,6 +12,12 @@
 - **Launcher/model contract:** publish the jointly accepted string configuration
   and launcher-to-host/runner plan ownership, including where current manager
   admission is enforced. No second registry or unilateral payload extension.
+- **Continuing manager integration:** connect the a2a-independent public manager
+  seam to the actual selected manager launch/resume handler, retaining its
+  runtime-operation/controller correlation before Core or provider effects.
+  The current resource-only constructor intentionally supplies no ordinary
+  operation admission. Dock the optional provider adapter and qualify its
+  designated child, complete enrollment and productive real task.
 - **Process proof/home lease:** qualify the session-record revision and kernel
   process-incarnation evidence required to complete hosted admission. The M3-S
   internal synthetic seam checks owned macOS process tuples and injected

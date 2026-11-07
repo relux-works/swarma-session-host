@@ -5,9 +5,10 @@ existing private Unix endpoint. Controller protocol 4 supplies bounded reads and
 durable consumed offsets; write-receipt protocol 1 is unchanged. The identify
 exchange remains separate from controller admission and output acknowledgement.
 
-The first qualified runtime is Darwin/arm64 with cgo. Linux identify peer proof
-is explicitly unsupported; successful cross-compilation is not runtime
-qualification. Darwin without cgo cannot capture the required child birth.
+The first qualified v1 runtime is Darwin/arm64 with cgo. Linux v1 birth
+remains unsupported. A separate Linux v2 ownership component is described in
+[runner-identify-v2.md](runner-identify-v2.md); connected UID/PID proof does not
+qualify native admission. Darwin without cgo cannot capture v1 child birth.
 
 This exchange reports a point-in-time ownership snapshot. It does not establish
 that the child is live, pin its lifetime, grant control or perform hosted

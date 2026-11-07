@@ -138,6 +138,17 @@ func (h *Host) notificationStreamExchange(conn *net.UnixConn, reader *bufio.Read
 	if !time.Now().Before(deadline) || h.ctx.Err() != nil {
 		return ErrNotificationUnresolved
 	}
+	// The decoded binding is expected input. Recheck actual retained manager,
+	// Core and provider custody outside mu before accepting this method.
+	h.mu.Lock()
+	lifecycle := h.notificationManager
+	h.mu.Unlock()
+	if lifecycle != nil && lifecycle.custody.checkNotificationOwner(h, lifecycle.selection) != nil {
+		return ErrNotificationUnresolved
+	}
+	if !time.Now().Before(deadline) {
+		return ErrNotificationUnresolved
+	}
 	r, err := h.notificationRequestUntil(q, deadline)
 	if err != nil {
 		return err
