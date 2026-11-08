@@ -1,8 +1,9 @@
 # Proposed process-provider control protocol
 
 Status: isolated Host-side candidate, disabled by absence of composition. The
-package has no importer, launcher, broker registration, live service or default
-adapter. It does not implement or qualify an a2a provider. The source owner
+package has an internal inert broker docking in `internal/sessionhost`, with no
+launcher, broker registration, live service or default adapter. It does not
+implement or qualify an a2a provider. The source owner
 retains protocol approval and implementation custody.
 
 The accepted [source decision](https://github.com/relux-works/a2a-swarm/issues/132#issuecomment-6705562655)
@@ -151,7 +152,12 @@ the package cannot forcibly terminate Go code and does not claim a clean join.
    throughout and must not run concurrently with a method reader. There is no
    proposed method frame, envelope extension or stream handoff in this package.
 5. The retained live enrollment/completion mapping through the registered
-   `curator-session-manager/1` seam. The selected-manager handler, broker
-   interfaces and inert adapters belong to their existing implementation. This
-   package neither edits nor substitutes for them. Fresh independent review and
-   source-owner approval remain required before composition or activation.
+   `curator-session-manager/1` seam. Host now exercises that mapping with a private
+   inert broker and independently retained fixture enrollment. It preserves the
+   manager-only callbacks, nested provider recheck, callback-before-ACK ordering
+   and continuing Done fence. The broker retains the allocated method endpoint
+   only for cleanup: it neither transports it to a provider nor reads it. No
+   second control channel, method framing or reader handoff is supplied. Real
+   origin verification, admission and method transport remain unimplemented.
+   Fresh independent review and source-owner approval remain required before
+   live composition or activation.

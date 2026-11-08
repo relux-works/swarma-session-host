@@ -203,7 +203,14 @@ func (m *NotificationManager) Prepare(ctx context.Context, kind string, data []b
 		claim.cleanupErr = errors.Join(claim.cleanupErr, prepared.Close())
 		return fail()
 	}
-	a := &ManagerAttachment{manager: m, custody: custody, prepared: prepared, lifecycle: lifecycle}
+	a := &ManagerAttachment{manager: m, custody: custody, prepared: prepared, lifecycle: lifecycle,
+		recheckHost: func(ctx context.Context) error {
+			if ctx == nil || ctx.Err() != nil {
+				return ErrNotificationUnresolved
+			}
+			return bridgeCustody.checkManagerOwner(m.owner.host, selection)
+		},
+	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -285,6 +292,7 @@ type ManagerAttachment struct {
 	lifecycle     *managedNotification
 	mu            sync.Mutex
 	completion    NotificationCompletion
+	recheckHost   func(context.Context) error
 	bootstrapping bool
 	bootstrapDone chan struct{}
 	closed        bool
@@ -341,9 +349,23 @@ func (a *ManagerAttachment) Bootstrap(ctx context.Context) error {
 			cancel()
 		}
 	}()
-	completion, err := a.prepared.Bootstrap(bootstrapCtx, NotificationBootstrap{MethodEndpoint: handoff.Endpoint, AttachmentReference: handoff.AttachmentRef, Binding: handoff.Binding, CallTimeoutMS: handoff.CallTimeoutMS, RecheckHost: recheck, OnEnrolled: func(ctx context.Context, e NotificationEnrollment) error {
-		if e == nil || recheck(ctx) != nil {
+	// Keep existing brokers' composite checks. Only the private serialized
+	// control adapter has already performed its nested provider recheck and
+	// must avoid starting another operation from inside that same callback.
+	callbackCheck := recheck
+	_, inertControl := a.prepared.(*inertPreparedProvider)
+	if inertControl {
+		callbackCheck = a.recheckHost
+	}
+	completion, err := a.prepared.Bootstrap(bootstrapCtx, NotificationBootstrap{MethodEndpoint: handoff.Endpoint, AttachmentReference: handoff.AttachmentRef, Binding: handoff.Binding, CallTimeoutMS: handoff.CallTimeoutMS, RecheckHost: callbackCheck, OnEnrolled: func(ctx context.Context, e NotificationEnrollment) error {
+		if e == nil || callbackCheck(ctx) != nil {
 			return ErrNotificationUnresolved
+		}
+		if inertControl {
+			_, err := a.lifecycle.completeEnrollmentChecked(brokerEnrollmentReceipt{e}, func() error {
+				return a.recheckHost(ctx)
+			})
+			return err
 		}
 		_, err := a.lifecycle.completeEnrollment(brokerEnrollmentReceipt{e})
 		return err
@@ -453,9 +475,19 @@ type brokerManagerCustody struct {
 }
 
 func (c brokerManagerCustody) lifetime() (context.Context, time.Time) { return c.manager.lifetime() }
-func (c brokerManagerCustody) checkNotificationOwner(h *Host, s notificationSelection) error {
+
+// During Bootstrap the provider owns its serialized operation. The callback
+// checks the retained manager and enrollment receipt without recursively starting
+// another provider operation. Ordinary admission/projection still rechecks both.
+func (c brokerManagerCustody) checkManagerOwner(h *Host, s notificationSelection) error {
 	if s != c.selection || c.provider.References() != c.references || c.admission == nil || c.admission.checkManagerOperation(c.manager.ctx, h, c.kind, c.data) != nil || c.manager.checkNotificationOwner(h, c.manager.selection) != nil {
 		return ErrNotificationUnresolved
+	}
+	return nil
+}
+func (c brokerManagerCustody) checkNotificationOwner(h *Host, s notificationSelection) error {
+	if err := c.checkManagerOwner(h, s); err != nil {
+		return err
 	}
 	return c.provider.Recheck(c.manager.ctx)
 }

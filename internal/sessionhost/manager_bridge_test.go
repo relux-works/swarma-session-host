@@ -426,3 +426,41 @@ func TestManagerBridgeOpaqueScope(t *testing.T) {
 		})
 	}
 }
+
+// Existing brokers keep their composite callback-time provider checks. A live
+// receipt does not override an unavailable prepared provider observation.
+func TestManagerBridgeCallbackRechecksProvider(t *testing.T) {
+	m, q, _ := managerBridgeFixture(t)
+	unknown := false
+	m.broker = bridgeBrokerFixture{prepare: func(_ context.Context, o ManagerOrigin) (PreparedNotificationBroker, error) {
+		return &bridgePreparedFixture{origin: o, check: func(ctx context.Context) error {
+			if unknown {
+				return ErrNotificationUnresolved
+			}
+			return o.Recheck(ctx)
+		}, bootstrap: func(ctx context.Context, h NotificationBootstrap) (NotificationCompletion, error) {
+			life, cancel := context.WithCancel(ctx)
+			completion := &bridgeCompletionFixture{ctx: life, cancel: cancel, endpoint: h.MethodEndpoint}
+			b := h.Binding
+			b.ConsumerGeneration, b.EnrollmentRef = "fixture-generation", "fixture-enrollment"
+			unknown = true
+			if err := h.OnEnrolled(ctx, bridgeEnrollmentFixture{b, h.AttachmentReference, life, time.Now().Add(time.Second)}); err == nil {
+				t.Error("unknown prepared provider installed a receipt")
+			}
+			m.owner.host.mu.Lock()
+			ready := m.owner.host.notificationManager.state == "ready"
+			m.owner.host.mu.Unlock()
+			if ready {
+				t.Error("callback installed before provider recheck")
+			}
+			return completion, ErrNotificationUnresolved
+		}}, nil
+	}}
+	a, err := m.Prepare(context.Background(), "launch", memberOperationBytes(t, q))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Bootstrap(context.Background()); !errors.Is(err, ErrNotificationUnresolved) {
+		t.Fatal("unknown provider bootstrap accepted", err)
+	}
+}

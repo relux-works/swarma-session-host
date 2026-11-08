@@ -97,3 +97,22 @@ The real provider adapter source pin and exact server/root-origin predicate are
 still required for live qualification; their absence does not prevent these
 Host-side source checks. No productive ordinary owner or provider default is
 installed by these tests.
+
+The private `inertProviderBroker` docks the proposed provider control client into
+these existing interfaces for in-package fixtures only. It freezes prepared
+references, retains the continuing owner independently of the request, and maps
+verified fixture enrollment into the Host callback before `installed`/ACK. During
+that callback, manager-only checks and the actual enrollment receipt are checked;
+the client has already performed the nested provider recheck. Ordinary admission
+and projection still perform the composite provider recheck. This avoids
+recursing through the client's serialized operation gate.
+
+The broker retains a nonnil completion after any consumed bootstrap, including
+callback or ACK loss. Control Done, retained owner loss and lease expiry cancel
+the enrolled lifetime and fence the Host service. Close joins the control reader,
+cooperative callback and bootstrap before returning; upstream `ErrCleanup` stays
+an explicit unjoined error for an uncooperative callback. The existing method
+endpoint is retained only for cleanup and has no reader or live provider handoff
+in this docking. No public constructor, process launch, provider registration,
+new protocol, native admission or platform qualification is added. Real provider
+composition and the control/method transport decision remain separate work.

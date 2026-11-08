@@ -12,7 +12,8 @@ import (
 // Callbacks must honor ctx, retain their own admitted objects and return without
 // awaiting ACK, a method call, this client's methods or Done. Enrollment is only
 // wire metadata; Enroll must perform actual live verification and installation
-// in the future owned Host composition. No such composition is supplied here.
+// in the owned Host composition. Only an internal inert docking is supplied;
+// no real origin verification or production composition is provided.
 type Callbacks struct {
 	RecheckHost func(context.Context) error
 	Enroll      func(context.Context, Enrollment) error

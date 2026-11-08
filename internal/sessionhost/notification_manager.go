@@ -187,13 +187,22 @@ func (a *managedNotification) sourceBootstrap() (sourceBootstrapHandoff, error) 
 }
 
 func (a *managedNotification) completeEnrollment(receipt verifiedSourceEnrollment) (notificationProjection, error) {
+	return a.completeEnrollmentChecked(receipt, func() error {
+		return a.custody.checkNotificationOwner(a.host, a.selection)
+	})
+}
+
+// The inert control callback has a fresh provider-owned enrollment recheck and uses
+// manager-only custody here; starting another serialized provider operation in
+// that callback would deadlock. The actual receipt is still checked below.
+func (a *managedNotification) completeEnrollmentChecked(receipt verifiedSourceEnrollment, checkOwner func() error) (notificationProjection, error) {
 	a.host.mu.Lock()
 	preparing := a.state == "preparing"
 	a.host.mu.Unlock()
 	if !preparing {
 		return notificationProjection{}, ErrNotificationUnresolved
 	}
-	if receipt == nil || a.custody.checkNotificationOwner(a.host, a.selection) != nil || receipt.checkEnrollment() != nil {
+	if receipt == nil || checkOwner == nil || checkOwner() != nil || receipt.checkEnrollment() != nil {
 		a.host.mu.Lock()
 		if a.state == "preparing" {
 			a.failLocked()
