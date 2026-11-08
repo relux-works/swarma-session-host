@@ -52,6 +52,14 @@ type PreparedNotificationBroker interface {
 	Bootstrap(context.Context, NotificationBootstrap) (NotificationCompletion, error)
 	Close() error
 }
+
+// enrollmentRecheckingBroker marks an internal adapter whose Bootstrap owns a
+// serialized provider recheck before enrollment. Its Host callbacks must check
+// Host custody without recursively entering that operation. Other brokers
+// retain the composite custody check.
+type enrollmentRecheckingBroker interface {
+	bootstrapRechecksProvider()
+}
 type NotificationCompletion interface {
 	Done() <-chan struct{}
 	Err() error
@@ -349,19 +357,18 @@ func (a *ManagerAttachment) Bootstrap(ctx context.Context) error {
 			cancel()
 		}
 	}()
-	// Keep existing brokers' composite checks. Only the private serialized
-	// control adapter has already performed its nested provider recheck and
-	// must avoid starting another operation from inside that same callback.
+	// Keep composite checks unless the adapter guarantees its own fresh provider
+	// recheck inside Bootstrap, before invoking the Host callbacks.
 	callbackCheck := recheck
-	_, inertControl := a.prepared.(*inertPreparedProvider)
-	if inertControl {
+	_, providerRechecked := a.prepared.(enrollmentRecheckingBroker)
+	if providerRechecked {
 		callbackCheck = a.recheckHost
 	}
 	completion, err := a.prepared.Bootstrap(bootstrapCtx, NotificationBootstrap{MethodEndpoint: handoff.Endpoint, AttachmentReference: handoff.AttachmentRef, Binding: handoff.Binding, CallTimeoutMS: handoff.CallTimeoutMS, RecheckHost: callbackCheck, OnEnrolled: func(ctx context.Context, e NotificationEnrollment) error {
 		if e == nil || callbackCheck(ctx) != nil {
 			return ErrNotificationUnresolved
 		}
-		if inertControl {
+		if providerRechecked {
 			_, err := a.lifecycle.completeEnrollmentChecked(brokerEnrollmentReceipt{e}, func() error {
 				return a.recheckHost(ctx)
 			})

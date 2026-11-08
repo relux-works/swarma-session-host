@@ -192,9 +192,9 @@ func (a *managedNotification) completeEnrollment(receipt verifiedSourceEnrollmen
 	})
 }
 
-// The inert control callback has a fresh provider-owned enrollment recheck and uses
-// manager-only custody here; starting another serialized provider operation in
-// that callback would deadlock. The actual receipt is still checked below.
+// An adapter that freshly rechecks the provider within Bootstrap can supply the
+// manager-only custody check here without recursively entering its operation.
+// The actual receipt is still checked below.
 func (a *managedNotification) completeEnrollmentChecked(receipt verifiedSourceEnrollment, checkOwner func() error) (notificationProjection, error) {
 	a.host.mu.Lock()
 	preparing := a.state == "preparing"

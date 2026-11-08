@@ -450,3 +450,343 @@ func TestInertProviderBrokerRetainedLifetimeBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestInertProviderBrokerEnrollmentOwnerCancel(t *testing.T) {
+	m, q, _, b, _ := inertBrokerManager(t, "normal")
+	// This owner is independent of both the broker's custody and the manager.
+	owner, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	verify := b.verify
+	b.verify = func(ctx context.Context, wire pp.Enrollment) (NotificationEnrollment, error) {
+		e, err := verify(ctx, wire)
+		if err != nil {
+			return nil, err
+		}
+		retained := e.(bridgeEnrollmentFixture)
+		retained.ctx = owner
+		return retained, nil
+	}
+	a, p := prepareInert(t, m, q)
+	if err := a.Bootstrap(context.Background()); err != nil {
+		t.Fatal("positive independent-owner control", err)
+	}
+	if view, _ := a.Projection(); view.State != "ready" {
+		t.Fatal("independent enrollment owner never became ready", view)
+	}
+	cancel()
+	awaitInert(t, a.lifecycle.done, "enrollment-owner fence of Host service")
+	awaitInert(t, p.closed, "enrollment-owner provider cleanup")
+	if m.owner.ctx.Err() != nil || b.owner.Err() != nil {
+		t.Fatal("enrollment cancellation revoked independent manager or broker owner")
+	}
+	if view, _ := a.Projection(); view.State != "unresolved" || view.Binding != nil {
+		t.Fatal("revoked enrollment remained ready", view)
+	}
+}
+
+// A distinct prepared type carries the same adapter capability. The generic
+// bridge must honor the capability rather than recognize one concrete type.
+type inertRecheckingBrokerFixture struct{ PreparedNotificationBroker }
+
+func (*inertRecheckingBrokerFixture) bootstrapRechecksProvider() {}
+
+func TestManagerBridgeEnrollmentRecheckingCapability(t *testing.T) {
+	m, q, _, broker, _ := inertBrokerManager(t, "normal")
+	m.broker = bridgeBrokerFixture{prepare: func(ctx context.Context, origin ManagerOrigin) (PreparedNotificationBroker, error) {
+		prepared, err := broker.Prepare(ctx, origin)
+		if prepared == nil {
+			return nil, err
+		}
+		return &inertRecheckingBrokerFixture{prepared}, err
+	}}
+	a, err := m.Prepare(context.Background(), "launch", memberOperationBytes(t, q))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := a.Bootstrap(ctx); err != nil {
+		t.Fatal("capability-bearing adapter recursively rechecked or failed Bootstrap", err)
+	}
+	if view, _ := a.Projection(); view.State != "ready" {
+		t.Fatal("capability-bearing adapter never became ready", view)
+	}
+}
+
+func TestInertProviderBrokerVerifiedWireAgreement(t *testing.T) {
+	for _, field := range []string{"matching", "generation", "enrollment", "attachment", "expiry"} {
+		t.Run(field, func(t *testing.T) {
+			m, q, f, b, _ := inertBrokerManager(t, "normal")
+			verify := b.verify
+			b.verify = func(ctx context.Context, wire pp.Enrollment) (NotificationEnrollment, error) {
+				e, err := verify(ctx, wire)
+				if err != nil {
+					return nil, err
+				}
+				retained := e.(bridgeEnrollmentFixture)
+				switch field {
+				case "generation":
+					retained.b.ConsumerGeneration = "other-generation"
+				case "enrollment":
+					retained.b.EnrollmentRef = "other-enrollment"
+				case "attachment":
+					retained.ref = "other-attachment"
+				case "expiry":
+					retained.expires = retained.expires.Add(time.Second)
+				}
+				return retained, nil
+			}
+			a, p := prepareInert(t, m, q)
+			// Exercise the adapter directly: downstream Host comparisons must
+			// not mask a missing verified-vs-wire check at this boundary.
+			handoff, err := a.lifecycle.sourceBootstrap()
+			if err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			completion, err := p.Bootstrap(context.Background(), NotificationBootstrap{
+				MethodEndpoint: handoff.Endpoint, AttachmentReference: handoff.AttachmentRef,
+				Binding: handoff.Binding, CallTimeoutMS: handoff.CallTimeoutMS,
+				RecheckHost: a.recheckHost,
+				OnEnrolled:  func(context.Context, NotificationEnrollment) error { called = true; return nil },
+			})
+			if completion != p || f.verified.Load() != 1 {
+				t.Fatal("verification boundary was not reached", err)
+			}
+			if field == "matching" {
+				if err != nil || !called {
+					t.Fatal("matching verified enrollment refused", err)
+				}
+			} else if err == nil || called || containsInert(f.snapshot(), "installed") {
+				t.Fatal("mismatched verified enrollment reached installation", err, called)
+			}
+			_ = a.Close()
+			awaitInert(t, p.closed, "verified enrollment cleanup")
+		})
+	}
+}
+
+// A request context may take time to unregister its cancellation callback.
+// Holding that cleanup keeps the real adapter Bootstrap caller outstanding
+// after the client exchange and callback have both finished. This isolates the
+// adapter's join from Client.Close and ManagerAttachment.Close.
+type inertStopBarrierContext struct {
+	context.Context
+	done, stopping, release chan struct{}
+	once                    sync.Once
+}
+
+func (c *inertStopBarrierContext) Done() <-chan struct{} { return c.done }
+func (c *inertStopBarrierContext) AfterFunc(f func()) func() bool {
+	stop := context.AfterFunc(c.Context, f)
+	return func() bool {
+		stopped := stop()
+		c.once.Do(func() { close(c.stopping) })
+		<-c.release
+		return stopped
+	}
+}
+
+func TestInertProviderBrokerCloseJoinsBootstrap(t *testing.T) {
+	m, q, _, _, _ := inertBrokerManager(t, "normal")
+	a, p := prepareInert(t, m, q)
+	handoff, err := a.lifecycle.sourceBootstrap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &inertStopBarrierContext{Context: parent, done: make(chan struct{}), stopping: make(chan struct{}), release: make(chan struct{})}
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(ctx.release) }) }
+	defer unblock()
+	bootstrap := make(chan error, 1)
+	go func() {
+		_, err := p.Bootstrap(ctx, NotificationBootstrap{
+			MethodEndpoint: handoff.Endpoint, AttachmentReference: handoff.AttachmentRef,
+			Binding: handoff.Binding, CallTimeoutMS: handoff.CallTimeoutMS,
+			RecheckHost: a.recheckHost,
+			OnEnrolled:  func(context.Context, NotificationEnrollment) error { return nil },
+		})
+		bootstrap <- err
+	}()
+	awaitInert(t, ctx.stopping, "Bootstrap caller cleanup barrier")
+	closed := make(chan struct{})
+	go func() { _ = p.Close(); close(closed) }()
+	awaitInert(t, p.client.Done(), "control client cleanup")
+	select {
+	case <-closed:
+		t.Fatal("adapter Close returned before Bootstrap caller cleanup joined")
+	case <-time.After(100 * time.Millisecond):
+	}
+	unblock()
+	awaitInert(t, closed, "adapter Close after Bootstrap release")
+	if err := <-bootstrap; err != nil {
+		t.Fatal("positive Bootstrap exchange failed", err)
+	}
+	_ = a.Close()
+}
+
+func TestInertProviderBrokerAbandonedVerifier(t *testing.T) {
+	m, q, _, b, _ := inertBrokerManager(t, "normal")
+	entered, release, exited := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	verify := b.verify
+	b.verify = func(ctx context.Context, wire pp.Enrollment) (NotificationEnrollment, error) {
+		e, err := verify(ctx, wire)
+		close(entered)
+		// Deliberately violate cancellation to reproduce a late verifier.
+		<-release
+		close(exited)
+		return e, err
+	}
+	a, p := prepareInert(t, m, q)
+	handoff, err := a.lifecycle.sourceBootstrap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var installed atomic.Bool
+	bootstrap := make(chan error, 1)
+	go func() {
+		_, err := p.Bootstrap(ctx, NotificationBootstrap{
+			MethodEndpoint: handoff.Endpoint, AttachmentReference: handoff.AttachmentRef,
+			Binding: handoff.Binding, CallTimeoutMS: handoff.CallTimeoutMS,
+			RecheckHost: a.recheckHost,
+			OnEnrolled:  func(context.Context, NotificationEnrollment) error { installed.Store(true); return nil },
+		})
+		bootstrap <- err
+	}()
+	awaitInert(t, entered, "uncooperative verifier entered")
+	cancel()
+	if err := <-bootstrap; err == nil {
+		t.Fatal("abandoned callback reported success")
+	}
+	// Client cleanup is bounded, even when a callback ignores cancellation.
+	select {
+	case <-p.closed:
+	case <-time.After(pp.CleanupBound + 3*time.Second):
+		t.Fatal("uncooperative callback exceeded cleanup bound")
+	}
+	if !errors.Is(p.Close(), pp.ErrCleanup) {
+		t.Fatal("unjoined verifier did not retain cleanup failure")
+	}
+	unblock()
+	awaitInert(t, exited, "late verifier release")
+	// Join the actual client callback, not just the verifier's return.
+	if err := p.client.Close(context.Background()); errors.Is(err, pp.ErrCleanup) {
+		t.Fatal("released verifier did not join", err)
+	}
+	p.mu.Lock()
+	registered := p.stopEnrollment != nil
+	p.mu.Unlock()
+	if registered || installed.Load() {
+		t.Fatal("abandoned callback registered owner hook or installed enrollment", registered, installed.Load())
+	}
+	_ = a.Close()
+}
+
+// A verifier may supply a context whose hook registration ignores cancellation.
+// A distinct Done channel makes context.AfterFunc use this AfterFunc method.
+type inertOwnerHookBarrierContext struct {
+	context.Context
+	done, entered, release chan struct{}
+	stopped                atomic.Bool
+}
+
+func (c *inertOwnerHookBarrierContext) Done() <-chan struct{} { return c.done }
+func (c *inertOwnerHookBarrierContext) AfterFunc(f func()) func() bool {
+	close(c.entered)
+	<-c.release
+	stop := context.AfterFunc(c.Context, f)
+	return func() bool {
+		c.stopped.Store(true)
+		return stop()
+	}
+}
+
+func TestInertProviderBrokerOwnerHookCleanupBound(t *testing.T) {
+	m, q, f, b, _ := inertBrokerManager(t, "normal")
+	owner := &inertOwnerHookBarrierContext{
+		Context: context.Background(), done: make(chan struct{}),
+		entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(owner.release) }) }
+	defer unblock()
+	verify := b.verify
+	b.verify = func(ctx context.Context, wire pp.Enrollment) (NotificationEnrollment, error) {
+		e, err := verify(ctx, wire)
+		if err != nil {
+			return nil, err
+		}
+		retained := e.(bridgeEnrollmentFixture)
+		retained.ctx = owner
+		return retained, nil
+	}
+	a, p := prepareInert(t, m, q)
+	handoff, err := a.lifecycle.sourceBootstrap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var installed atomic.Bool
+	bootstrap := make(chan error, 1)
+	go func() {
+		_, err := p.Bootstrap(ctx, NotificationBootstrap{
+			MethodEndpoint: handoff.Endpoint, AttachmentReference: handoff.AttachmentRef,
+			Binding: handoff.Binding, CallTimeoutMS: handoff.CallTimeoutMS,
+			RecheckHost: a.recheckHost,
+			OnEnrolled:  func(context.Context, NotificationEnrollment) error { installed.Store(true); return nil },
+		})
+		bootstrap <- err
+	}()
+	awaitInert(t, owner.entered, "blocking owner hook registration")
+	cancel()
+	select {
+	case err := <-bootstrap:
+		if err == nil {
+			t.Fatal("abandoned owner hook reported Bootstrap success")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Bootstrap did not abandon blocking owner hook")
+	}
+	closed := make(chan struct{})
+	var closeErr error
+	start := time.Now()
+	go func() { closeErr = p.Close(); close(closed) }()
+	select {
+	case <-closed:
+		if !errors.Is(closeErr, pp.ErrCleanup) {
+			t.Error("unjoined owner hook did not retain cleanup failure", closeErr)
+		}
+		t.Logf("Close returned ErrCleanup with owner hook blocked after %s", time.Since(start))
+	case <-time.After(pp.CleanupBound + 3*time.Second):
+		// Record a behavioral failure, then release and join the real work.
+		// A test-binary timeout is not evidence for this cleanup contract.
+		t.Error("adapter Close exceeded cleanup bound with owner hook blocked")
+	}
+	unblock()
+	awaitInert(t, closed, "adapter Close after owner hook release")
+	if !errors.Is(closeErr, pp.ErrCleanup) {
+		t.Error("adapter lost unjoined owner cleanup error", closeErr)
+	}
+	if err := p.client.Close(context.Background()); errors.Is(err, pp.ErrCleanup) {
+		t.Fatal("released owner hook callback did not join", err)
+	}
+	p.mu.Lock()
+	registered := p.stopEnrollment != nil
+	p.mu.Unlock()
+	if registered || installed.Load() || containsInert(f.snapshot(), "installed") {
+		t.Error("abandoned owner hook published hook or installed enrollment", registered, installed.Load())
+	}
+	if !owner.stopped.Load() {
+		t.Error("refused owner hook was not stopped")
+	}
+	_ = a.Close()
+}

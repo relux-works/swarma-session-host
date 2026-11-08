@@ -80,6 +80,10 @@ type inertPreparedProvider struct {
 	closeErr       error // published by closed
 }
 
+// Bootstrap performs the proposed client's nested provider recheck before the
+// enrollment callback. Keep this protocol property at the adapter boundary.
+func (*inertPreparedProvider) bootstrapRechecksProvider() {}
+
 func (p *inertPreparedProvider) References() NotificationReferences { return p.refs }
 func (p *inertPreparedProvider) Done() <-chan struct{}              { return p.ctx.Done() }
 func (p *inertPreparedProvider) Err() error {
@@ -154,8 +158,18 @@ func (p *inertPreparedProvider) Bootstrap(ctx context.Context, h NotificationBoo
 				return ErrNotificationUnresolved
 			}
 			life, retire := context.WithDeadline(p.ctx, expiry)
+			// Hook registration may invoke verifier-supplied context methods.
+			// Keep it outside the adapter lock so cleanup remains bounded.
 			stop := context.AfterFunc(owner, retire)
 			p.mu.Lock()
+			// A late callback must not publish a hook after the watcher has
+			// taken responsibility for stopping the last published hook.
+			if p.closing {
+				p.mu.Unlock()
+				stop()
+				retire()
+				return ErrNotificationUnresolved
+			}
 			p.stopEnrollment = stop
 			p.mu.Unlock()
 			return h.OnEnrolled(ctx, inertProviderEnrollment{NotificationEnrollment: e, ctx: life, expires: expiry, provider: p})
@@ -224,3 +238,4 @@ func (e inertProviderEnrollment) Recheck() error {
 var _ NotificationBroker = (*inertProviderBroker)(nil)
 var _ PreparedNotificationBroker = (*inertPreparedProvider)(nil)
 var _ NotificationCompletion = (*inertPreparedProvider)(nil)
+var _ enrollmentRecheckingBroker = (*inertPreparedProvider)(nil)
