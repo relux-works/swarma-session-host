@@ -243,7 +243,7 @@ func JournalMetadata(b []byte, v MetadataValues, k int) error {
 	}
 	p := c.object(m["protocol"], "boundary_version observed_release checkpoint wire_sequence pending view", "")
 	c.number(p["boundary_version"], 1, 1)
-	c.text(p["observed_release"], "0.164.0")
+	c.text(p["observed_release"], "0.167.0")
 	c.checkpoint(p["checkpoint"], v, k)
 	c.number(p["wire_sequence"], 3, 5)
 	view := c.object(p["view"], "InputID Activity NativeSession CurrentTurn", "")

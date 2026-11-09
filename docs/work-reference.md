@@ -8,7 +8,7 @@ select a launch profile, obtain credentials or answer approval requests.
 `--notice-mode synthetic` is the default and preserves the original no-tool
 reply prompt. `--notice-mode work-reference` is an explicit Codex-only opt-in.
 Unknown modes and work mode on a fixture adapter refuse. Vendor, model and
-reasoning remain opaque strings. The native release remains pinned to 0.164.0;
+reasoning remain opaque strings. The native release remains pinned to 0.167.0;
 a declaration in a flag does not verify the actual running executable.
 
 Work mode additionally requires `--codex-policy yolo`, a separately admitted
@@ -46,7 +46,7 @@ for nonsecret deployment values, not credentials:
   --socket "$HOST_SOCKET" --runner "$RUNNER_SOCKET" --state "$HOST_STATE" \
   --execution "$EXECUTION" --adapter codex --notice-mode work-reference \
   --codex-policy yolo \
-  --workspace "$WORKSPACE" --native-release 0.164.0 \
+  --workspace "$WORKSPACE" --native-release 0.167.0 \
   --vendor "$VENDOR" --model "$MODEL" --reasoning "$EFFORT" \
   --io-timeout 20s --poll-interval 25ms
 

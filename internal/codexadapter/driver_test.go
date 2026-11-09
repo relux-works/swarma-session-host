@@ -134,7 +134,7 @@ func TestDriverLifecycleAdmission(t *testing.T) {
 	if d, _, err := OpenDriver(c, nil); !errors.Is(err, ap.ErrUnsupported) || d != nil {
 		t.Fatal("preallocated Codex identity admitted")
 	}
-	for _, release := range []string{"", "0.163.0", "future-release"} {
+	for _, release := range []string{"", "0.163.0", "0.164.0", "future-release"} {
 		bad := driverConfig()
 		bad.NativeRelease = release
 		if d, _, err := OpenDriver(bad, nil); !errors.Is(err, ap.ErrUnsupported) || d != nil {

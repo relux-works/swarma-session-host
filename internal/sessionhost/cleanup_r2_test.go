@@ -337,7 +337,7 @@ func TestCreateCleanupPendingObservation(t *testing.T) {
 func TestManagerCloseWaitsCompletionDone(t *testing.T) {
 	m, q, _ := managerBridgeFixture(t)
 	m.owner.host.mu.Lock()
-	m.owner.host.state.Protocol.ObservedRelease = "0.164.0"
+	m.owner.host.state.Protocol.ObservedRelease = "0.167.0"
 	m.owner.host.mu.Unlock()
 	called, preparedClosed := make(chan struct{}), make(chan struct{})
 	var completion *signalCleanupCompletion

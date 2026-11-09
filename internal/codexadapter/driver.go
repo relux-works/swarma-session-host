@@ -36,7 +36,7 @@ type driverRecord struct {
 
 var _ ap.Driver = (*Driver)(nil)
 
-const ObservedRelease = "0.164.0"
+const ObservedRelease = "0.167.0"
 
 const (
 	SyntheticNotice = "synthetic"

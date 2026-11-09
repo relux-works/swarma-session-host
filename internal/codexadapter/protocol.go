@@ -1,4 +1,4 @@
-// Package codexadapter implements the bounded stdio protocol for Codex 0.164.0.
+// Package codexadapter implements the bounded stdio protocol for Codex 0.167.0.
 // It owns no processes, credentials, durable receipts, or transport reconnection.
 package codexadapter
 

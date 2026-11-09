@@ -19,7 +19,7 @@ func selectedCleanupFixture(t *testing.T) (*registeredHostPlugin, *selectedOrdin
 	m, q, _ := managerBridgeFixture(t)
 	m.admission = nil
 	m.owner.host.mu.Lock()
-	m.owner.host.state.Protocol.ObservedRelease = "0.164.0"
+	m.owner.host.state.Protocol.ObservedRelease = "0.167.0"
 	m.owner.host.mu.Unlock()
 	q["submitted_at"] = time.Now().UTC().Format(time.RFC3339)
 	b := &selectedBrokerFixture{}

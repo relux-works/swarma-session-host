@@ -5,7 +5,7 @@ description: Build, exercise or extend Swarma Session Host's current Go host/run
 
 # Swarma Session Host
 
-Use this repository's foreground host/runner prototype. The Host owns input intent, receipts and controller epochs; the runner owns one child and its stdio. Current adapters are JSON/line fixtures and Codex 0.164.0; Claude/Muse examples are interface fixtures only. [C01](references/evidence.md#c01)
+Use this repository's foreground host/runner prototype. The Host owns input intent, receipts and controller epochs; the runner owns one child and its stdio. Current adapters are JSON/line fixtures and Codex 0.167.0; Claude/Muse examples are interface fixtures only. [C01](references/evidence.md#c01)
 
 Start with the route relevant to the request:
 

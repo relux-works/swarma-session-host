@@ -517,7 +517,7 @@ func TestAdmissionProtocolGate(t *testing.T) {
 			_, p := admitted(t, base)
 			b := &p.proof.Record.Binding
 			b.Runtime = "codex"
-			b.NativeRelease = "0.164.0"
+			b.NativeRelease = "0.167.0"
 			b.NativeSession = "synthetic-thread"
 			if mode == "native" {
 				b.NativeSession = "other-native"

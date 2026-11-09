@@ -144,7 +144,7 @@ An `ok` enqueue response retains intent; it does not mean work completed.
 ## Conditional Codex interface
 
 The Host can connect to an already separately admitted runner with
-`--adapter codex --workspace /absolute/admitted/workspace --native-release 0.164.0`,
+`--adapter codex --workspace /absolute/admitted/workspace --native-release 0.167.0`,
 explicit `--vendor`, `--model`, `--reasoning`, `--io-timeout` and
 `--poll-interval` (the documented example uses 5s and 25ms). Codex refuses
 `--input-state`: its state comes from protocol observations. A release flag

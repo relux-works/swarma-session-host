@@ -29,7 +29,7 @@ func validNotificationState(s State) bool {
 		return s.Version != notificationStateVersion
 	}
 	if s.Version != notificationStateVersion || s.NoticeMode != WorkReference || s.Adapter != "codex" || s.Protocol == nil ||
-		s.Protocol.ObservedRelease != "0.164.0" || !j.Binding.valid() || j.Binding.Execution != s.Execution ||
+		s.Protocol.ObservedRelease != "0.167.0" || !j.Binding.valid() || j.Binding.Execution != s.Execution ||
 		j.Binding.RunnerInstance != s.RunnerInstance || len(j.Attempts) > MaxRecords {
 		return false
 	}
@@ -91,7 +91,7 @@ func (h *Host) notificationHostIdentityMatchesLocked(b NotificationBinding) bool
 	return scalar.MatchString(b.Execution) && notificationU64(b.ControllerEpoch, true) &&
 		scalar.MatchString(b.RunnerInstance) && scalar.MatchString(b.NativeThread) &&
 		h.driver != nil && h.state.Protocol != nil && h.state.Adapter == "codex" &&
-		h.state.NoticeMode == WorkReference && h.state.Protocol.ObservedRelease == "0.164.0" &&
+		h.state.NoticeMode == WorkReference && h.state.Protocol.ObservedRelease == "0.167.0" &&
 		b.Execution == h.state.Execution && b.ControllerEpoch == strconv.FormatUint(h.state.Epoch, 10) &&
 		b.RunnerInstance == h.state.RunnerInstance && b.NativeThread == h.state.Protocol.View.NativeSession
 }
@@ -219,7 +219,7 @@ func (h *Host) notificationRequestUntil(q NotificationRequest, deadline time.Tim
 		return finish("refused", "binding-conflict")
 	}
 	if q.Method == "observe_binding" {
-		r.View = &NotificationView{Binding: b, Adapter: "codex", DeclaredNativeRelease: "0.164.0", NoticeMode: WorkReference,
+		r.View = &NotificationView{Binding: b, Adapter: "codex", DeclaredNativeRelease: "0.167.0", NoticeMode: WorkReference,
 			Gate: h.notificationGateLocked(), RecordsRemaining: MaxRecords - len(h.state.Records)}
 		return finish("observed", "")
 	}

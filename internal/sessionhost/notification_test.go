@@ -31,7 +31,7 @@ func notificationReply(q NotificationRequest, result string) NotificationRespons
 	r := NotificationResponse{Contract: q.Contract, RequestID: q.RequestID, Method: q.Method, Result: result}
 	switch result {
 	case "observed":
-		r.View = &NotificationView{Binding: q.Binding, Adapter: "codex", DeclaredNativeRelease: "0.164.0", NoticeMode: WorkReference, Gate: "open", RecordsRemaining: 32}
+		r.View = &NotificationView{Binding: q.Binding, Adapter: "codex", DeclaredNativeRelease: "0.167.0", NoticeMode: WorkReference, Gate: "open", RecordsRemaining: 32}
 	case "accepted", "existing-attempt":
 		r.Attempt = &NotificationAttempt{NoticeID: q.NoticeID, WorkflowReference: q.Binding.WorkflowReference, WorkflowSHA256: q.Binding.WorkflowSHA256,
 			Sequence: "1", Custody: "host-accepted", NativeStage: "not-evidenced"}

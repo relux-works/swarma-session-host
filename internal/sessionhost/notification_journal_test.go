@@ -30,7 +30,7 @@ type journalDriver struct {
 }
 
 func (*journalDriver) Descriptor() ap.Descriptor {
-	return ap.Descriptor{Version: ap.Version, ObservedRelease: "0.164.0", Name: "codex", PrimaryTransport: "pipe", Capabilities: ap.Capabilities{NextTurn: true}}
+	return ap.Descriptor{Version: ap.Version, ObservedRelease: "0.167.0", Name: "codex", PrimaryTransport: "pipe", Capabilities: ap.Capabilities{NextTurn: true}}
 }
 func (*journalDriver) NoticeMode() string { return WorkReference }
 func (d *journalDriver) Snapshot() ap.Transition {
@@ -65,7 +65,7 @@ func journalUnit(t *testing.T, install bool) (*Host, NotificationRequest) {
 	h := &Host{store: s, ctx: ctx, cancel: cancel, kick: make(chan struct{}, 1), driver: d,
 		state: State{Version: 3, NoticeMode: WorkReference, Execution: q.Binding.Execution, RunnerInstance: q.Binding.RunnerInstance, Adapter: "codex", Epoch: 1,
 			Selection: Selection{Vendor: "provider", Model: "model", Reasoning: "effort"}, Fence: "open", InputState: InputIdle,
-			Protocol: &ProtocolState{BoundaryVersion: ap.Version, ObservedRelease: "0.164.0", Checkpoint: snapshot.Checkpoint, View: snapshot.View}}}
+			Protocol: &ProtocolState{BoundaryVersion: ap.Version, ObservedRelease: "0.167.0", Checkpoint: snapshot.Checkpoint, View: snapshot.View}}}
 	h.cfg = Config{Execution: h.state.Execution, NoticeMode: WorkReference, Selection: h.state.Selection}
 	if err := s.write(h.state); err != nil {
 		t.Fatal(err)

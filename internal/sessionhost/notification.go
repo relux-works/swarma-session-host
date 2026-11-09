@@ -75,7 +75,7 @@ type NotificationView struct {
 }
 
 func (v NotificationView) valid() bool {
-	return v.Binding.valid() && v.Adapter == "codex" && v.DeclaredNativeRelease == "0.164.0" &&
+	return v.Binding.valid() && v.Adapter == "codex" && v.DeclaredNativeRelease == "0.167.0" &&
 		v.NoticeMode == WorkReference && v.RecordsRemaining >= 0 && v.RecordsRemaining <= 32 &&
 		notificationOneOf(v.Gate, "open", "input-not-ready", "external-held", "security-stopped", "capacity-full", "observation-unavailable")
 }

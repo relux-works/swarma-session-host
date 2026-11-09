@@ -121,7 +121,7 @@ func TestManagerBridgePreAttachmentRefusal(t *testing.T) {
 func TestManagerBridgeLifecycle(t *testing.T) {
 	m, q, _ := managerBridgeFixture(t)
 	m.owner.host.mu.Lock()
-	m.owner.host.state.Protocol.ObservedRelease = "0.164.0"
+	m.owner.host.state.Protocol.ObservedRelease = "0.167.0"
 	m.owner.host.mu.Unlock()
 	var completion *bridgeCompletionFixture
 	var binding NotificationBinding
@@ -324,7 +324,7 @@ func TestManagerBridgeCompletionRefusals(t *testing.T) {
 func TestManagerBridgeCompletionEndsService(t *testing.T) {
 	m, q, _ := managerBridgeFixture(t)
 	m.owner.host.mu.Lock()
-	m.owner.host.state.Protocol.ObservedRelease = "0.164.0"
+	m.owner.host.state.Protocol.ObservedRelease = "0.167.0"
 	m.owner.host.mu.Unlock()
 	var completion *bridgeCompletionFixture
 	m.broker = bridgeBrokerFixture{prepare: func(_ context.Context, o ManagerOrigin) (PreparedNotificationBroker, error) {

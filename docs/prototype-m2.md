@@ -1,6 +1,6 @@
 # M2: bounded Codex protocol prototype
 
-The macOS prototype adds a Codex 0.164.0 app-server stdio adapter to the
+The macOS prototype adds a Codex 0.167.0 app-server stdio adapter to the
 [M1 runner and fixture host](prototype-m1.md). This is fresh Go code. It does
 not import the board session daemon, its helpers, schemas or tests.
 
@@ -21,7 +21,7 @@ input only; generated upstream schemas are not vendored in the implementation.
 The frozen boundary is **adapterprotocol v1**. Descriptors and durable protocol
 state carry version 1; other versions are rejected before initialization or
 replay. Every enabled capability in a descriptor is bound to its
-`ObservedRelease`, which is `0.164.0` for the Codex adapter. Schematic fixture
+`ObservedRelease`, which is `0.167.0` for the Codex adapter. Schematic fixture
 descriptors identify their release as `schematic` and establish no native feature.
 
 Any change to boundary fields, meaning, capabilities or acceptance rules requires
@@ -171,7 +171,7 @@ After an admitted caller has started the runner with its approved non-secret pla
   --runner /absolute/private/runner.sock \
   --state /absolute/private/host-state --execution execution-id \
   --adapter codex --workspace /absolute/admitted/workspace \
-  --native-release 0.164.0 \
+  --native-release 0.167.0 \
   --vendor openai --model "$MODEL" --reasoning "$EFFORT" \
   --io-timeout 5s --poll-interval 25ms
 ```
@@ -204,7 +204,7 @@ Two isolated control plants intentionally resend missing input and infer complet
 from acceptance; each fails the specific negative assertion. Source is restored
 after those controls. Existing fixture/security/lifecycle tests remain applicable.
 
-Native qualification needs the installed Codex 0.164.0 protocol and an admitted
+Native qualification needs the installed Codex 0.167.0 protocol and an admitted
 Curator profile. Curator retains environment/credential custody; no auth files,
 keys, tokens, parent agent identities or raw protocol logs enter the product
 journal. Local protocol evidence does not substitute for hosted module CI or

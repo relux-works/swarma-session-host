@@ -140,7 +140,7 @@ func selectedFixture(t *testing.T) (*registeredHostPlugin, *selectedOrdinaryFixt
 	m, q, _ := managerBridgeFixture(t)
 	m.admission = nil
 	m.owner.host.mu.Lock()
-	m.owner.host.state.Protocol.ObservedRelease = "0.164.0"
+	m.owner.host.state.Protocol.ObservedRelease = "0.167.0"
 	m.owner.host.mu.Unlock()
 	q["submitted_at"] = time.Now().UTC().Format("2006-01-02T15:04:05Z")
 	b := &selectedBrokerFixture{}
