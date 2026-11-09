@@ -106,9 +106,15 @@ type State struct {
 	SecurityStopped bool                 `json:"security_stopped"`
 	Protocol        *ProtocolState       `json:"protocol,omitempty"`
 	Notification    *notificationJournal `json:"notification,omitempty"`
+	DebugAttach     bool                 `json:"debug_attach,omitempty"`
+	Debug           *debugMetadata       `json:"debug,omitempty"`
 }
 
 type Config struct {
+	// DebugAttach is a private inert admission seam. Nil restores the recorded
+	// bit on replacement; a supplied value must match an existing execution.
+	// This does not advertise an attach capability or revise launcher schemas.
+	DebugAttach *bool
 	// Admission is an opt-in internal synthetic proof seam, not a hosted launcher.
 	Admission *admission.Config
 	// NoticeMode is immutable for an execution. Empty preserves synthetic notices.
@@ -149,6 +155,7 @@ type Host struct {
 	notificationClosed  bool
 	notificationStream  *notificationAttachment
 	notificationManager *managedNotification
+	debug               *debugAttachment
 }
 
 func validNotice(n Notice) bool { return scalar.MatchString(n.ID) && scalar.MatchString(n.Reference) }
@@ -178,6 +185,10 @@ func digestNoticeMode(n Notice, s Selection, mode string) string {
 }
 
 func Open(cfg Config) (*Host, error) {
+	if cfg.DebugAttach != nil {
+		bit := *cfg.DebugAttach
+		cfg.DebugAttach = &bit
+	}
 	name := cfg.ProtocolName
 	protocol := cfg.ProtocolFactory != nil
 	mode := noticeMode(cfg.NoticeMode)
@@ -217,6 +228,10 @@ func Open(cfg Config) (*Host, error) {
 			state.Version = 3
 			state.NoticeMode = WorkReference
 		}
+	}
+	if err := admitDebug(&state, exists, cfg.DebugAttach); err != nil {
+		store.close()
+		return nil, err
 	}
 	if exists && ((state.Admission != nil) != (cfg.Admission != nil) || (state.Admission != nil && state.Admission.Failed)) {
 		store.close()
@@ -361,8 +376,22 @@ func Open(cfg Config) (*Host, error) {
 	}
 	workCtx, workCancel := context.WithCancel(context.Background())
 	h := &Host{cfg: cfg, store: store, client: client, state: state, ctx: workCtx, cancel: workCancel, kick: make(chan struct{}, 1), driver: driver, outputOffset: outputOffset, runnerReadOffset: uint64(claim.BaseOffset), consumedOffset: uint64(claim.BaseOffset), recovering: exists}
+	if state.DebugAttach {
+		if err := h.openDebug(exists); err != nil {
+			h.cancel()
+			if h.debug != nil {
+				h.debug.close()
+			}
+			client.Close()
+			store.close()
+			return nil, err
+		}
+	}
 	if err := h.ObserveInput(); err != nil {
 		h.cancel()
+		if h.debug != nil {
+			h.debug.close()
+		}
 		client.Close()
 		store.close()
 		return nil, err
@@ -376,10 +405,17 @@ func Open(cfg Config) (*Host, error) {
 		h.mu.Unlock()
 		if beginErr != nil {
 			h.cancel()
+			if h.debug != nil {
+				h.debug.close()
+			}
 			client.Close()
 			store.close()
 			return nil, errors.New("protocol_begin_refused")
 		}
+	}
+	if h.debug != nil {
+		h.wg.Add(1)
+		go h.debugExpiryTimerLoop()
 	}
 	h.wg.Add(1)
 	if protocol {
@@ -392,6 +428,9 @@ func Open(cfg Config) (*Host, error) {
 }
 
 func (h *Host) persistLocked(next State) error {
+	if next.DebugAttach != h.state.DebugAttach {
+		return errors.New("attach_admission_conflict")
+	}
 	if h.ctx.Err() != nil {
 		return errors.New("host_unavailable")
 	}
@@ -558,7 +597,7 @@ func (h *Host) deliverNext() bool {
 		return false
 	}
 	h.mu.Lock()
-	if h.ctx.Err() != nil || h.err != nil || h.state.Fence != "open" || h.state.InputState != InputIdle || h.state.SecurityStopped {
+	if h.ctx.Err() != nil || h.err != nil || h.state.Fence != "open" || h.state.InputState != InputIdle || h.state.SecurityStopped || !h.debugAutomaticLocked() {
 		h.mu.Unlock()
 		return false
 	}
@@ -576,6 +615,10 @@ func (h *Host) deliverNext() bool {
 	next := h.state
 	next.Records = slices.Clone(next.Records)
 	next.Records[index].State = "unknown"
+	if err := h.debugJournalLocked("notice", next.Records[index].Notice.ID, nil, false); err != nil {
+		h.mu.Unlock()
+		return false
+	}
 	if err := h.persistLocked(next); err != nil {
 		h.mu.Unlock()
 		return false
@@ -638,9 +681,20 @@ func (h *Host) Stop(ctx context.Context) (runner.Response, error) {
 		return runner.Response{}, err
 	}
 	h.mu.Lock()
+	if !h.state.StopRequested {
+		if err := h.debugJournalLocked("stop", "host-stop", nil, true); err != nil {
+			h.mu.Unlock()
+			return runner.Response{}, err
+		}
+	}
 	next := h.state
 	next.Fence = "held"
 	next.StopRequested = true
+	if next.DebugAttach {
+		next = cloneState(next)
+		next.Debug.Writer = "stopped"
+		next.Debug.WriterRevision++
+	}
 	if h.state.Fence == "unknown" {
 		next.Fence = "unknown"
 	}
@@ -662,6 +716,11 @@ func (h *Host) Close() error {
 		h.mu.Lock()
 		h.mu.Unlock()
 		h.wg.Wait()
+		h.mu.Lock()
+		if h.debug != nil {
+			h.debug.close()
+		}
+		h.mu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), h.cfg.IOTimeout)
 		h.client.Call(ctx, runner.Request{Op: "release", Execution: h.cfg.Execution, Epoch: h.state.Epoch})
 		cancel()

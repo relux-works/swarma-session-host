@@ -56,6 +56,16 @@ func (d *Driver) Descriptor() ap.Descriptor { return Descriptor() }
 // NoticeMode is immutable construction metadata, not a runtime grant.
 func (d *Driver) NoticeMode() string { return d.noticeMode }
 
+// SetDebugObserver is a private host seam; it grants no native operation.
+// Callbacks must copy synchronously, be bounded and never perform viewer I/O.
+func (d *Driver) SetDebugObserver(observe func([]byte)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.stream.mu.Lock()
+	defer d.stream.mu.Unlock()
+	d.stream.debugObserver = observe
+}
+
 // OpenDriver restores metadata only. The returned offset is a replay request,
 // never authority to trust an unobserved runner or write another turn.
 func OpenDriver(cfg ap.Config, saved []byte) (*Driver, uint64, error) {

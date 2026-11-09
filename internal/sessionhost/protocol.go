@@ -42,6 +42,11 @@ type WireAction struct {
 func wireDigest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
 func cloneState(s State) State {
+	if s.Debug != nil {
+		d := *s.Debug
+		d.Results = slices.Clone(d.Results)
+		s.Debug = &d
+	}
 	s.Records = slices.Clone(s.Records)
 	if s.Notification != nil {
 		j := *s.Notification
@@ -175,6 +180,9 @@ func (h *Host) persistTransitionLocked(t ap.Transition) error {
 		p.Usage = &u
 	}
 	for _, a := range t.Actions {
+		if err := h.debugJournalLocked("protocol_control", a.Key, a.Bytes, false); err != nil {
+			return err
+		}
 		p.WireSequence++
 		p.Pending = append(p.Pending, WireAction{Sequence: p.WireSequence, Key: a.Key, InputID: a.InputID, Data: bytes.Clone(a.Bytes), Digest: wireDigest(a.Bytes)})
 	}
@@ -222,6 +230,11 @@ func (h *Host) persistTransitionLocked(t ap.Transition) error {
 				r.State = "applied"
 			} else {
 				next.Fence = "unknown"
+			}
+			if next.DebugAttach && r.Outcome != h.state.Records[i].Outcome {
+				if err := h.debugTerminalLocked(&next, f.NativeSession, f.NativeID, outcome); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -439,7 +452,7 @@ func (h *Host) pollProtocol() bool {
 func (h *Host) prepareProtocol() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.ctx.Err() != nil || h.err != nil || h.protocolFailed || h.recovering || h.state.StopRequested || h.state.SecurityStopped || h.state.Fence != "open" || h.state.InputState != InputIdle || len(h.state.Protocol.Pending) > 0 {
+	if h.ctx.Err() != nil || h.err != nil || h.protocolFailed || h.recovering || h.state.StopRequested || h.state.SecurityStopped || h.state.Fence != "open" || h.state.InputState != InputIdle || len(h.state.Protocol.Pending) > 0 || !h.debugAutomaticLocked() {
 		return false
 	}
 	i := -1
@@ -459,6 +472,9 @@ func (h *Host) prepareProtocol() bool {
 	}
 	next := cloneState(h.state)
 	next.Records[i].State = "unknown"
+	if err := h.debugJournalLocked("notice", next.Records[i].Notice.ID, nil, false); err != nil {
+		return false
+	}
 	if h.persistLocked(next) != nil {
 		return false
 	}

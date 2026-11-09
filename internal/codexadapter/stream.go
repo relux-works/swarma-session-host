@@ -10,12 +10,13 @@ import (
 // Gaps, rewinds, oversized chunks/lines and EOF close input permanently.
 // Metadata restore requires explicit replay/catchup; it never authorizes writes.
 type Stream struct {
-	mu        sync.Mutex
-	protocol  *Protocol
-	next      uint64
-	partial   []byte
-	closed    bool
-	replaying bool
+	mu            sync.Mutex
+	protocol      *Protocol
+	next          uint64
+	partial       []byte
+	closed        bool
+	replaying     bool
+	debugObserver func([]byte)
 }
 
 func NewStream(cfg Config) (*Stream, error) {
@@ -85,6 +86,11 @@ func (s *Stream) Feed(offset uint64, chunk []byte) ([][]byte, error) {
 		s.partial = append(s.partial, chunk[:take]...)
 		if n < 0 {
 			break
+		}
+		if s.debugObserver != nil {
+			// Complete ordered frames are copied before semantic payload discard.
+			// The private host callback is bounded and performs no viewer I/O.
+			s.debugObserver(s.partial)
 		}
 		frames, err := s.protocol.Consume(s.partial)
 		s.partial = nil
