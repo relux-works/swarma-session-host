@@ -30,3 +30,27 @@ jobs:
       # Admission exhaustion remains non-green; it is not a product-test failure.
       - name: Vet and test (125 means infrastructure unavailable)
         run: python3 tools/ci/module_checks.py
+
+  module-linux:
+    name: Linux module checks
+    # Pin the Ubuntu release so the Linux baseline does not follow ubuntu-latest.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOMAXPROCS: '2'
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.5'
+          cache: false
+      - name: Check workflow result classification
+        run: python3 -m unittest discover -s tools/ci -p 'test_module_checks.py' -v
+      # Admission exhaustion remains non-green; it is not a product-test failure.
+      - name: Vet and test (125 means infrastructure unavailable)
+        run: python3 tools/ci/module_checks.py

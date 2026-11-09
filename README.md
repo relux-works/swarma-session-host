@@ -164,7 +164,9 @@ acceptance. Outstanding integration and repository-owner actions are in
 [UNRESOLVED_QUESTIONS.md](UNRESOLVED_QUESTIONS.md).
 
 [Module CI](.github/workflows/module.yml) runs Go 1.25.5 module vet and race
-tests on GitHub-hosted macOS, using only this public repository. Each check records load and waits at most 120s to start below 20; cgo is explicit.
+tests on GitHub-hosted macOS (`macos-latest`) and Linux (`ubuntu-24.04`), using
+only this public repository. Each check records load and waits at most 120s to
+start below 20; cgo is explicit.
 Both checks are attempted even if one fails or cannot start. Historical extraction workflows are retired.
 The [check result contract](tools/ci/README.md) distinguishes unavailable checks
 from observed product exits; admission exhaustion remains non-green.

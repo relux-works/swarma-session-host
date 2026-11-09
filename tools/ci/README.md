@@ -1,3 +1,8 @@
+The module workflow runs on GitHub-hosted macOS (`macos-latest`) and Linux
+(`ubuntu-24.04`), both with Go 1.25.5 and cgo enabled. Ubuntu 24.04 pins the
+Linux release baseline rather than following the moving `ubuntu-latest` label.
+Both jobs run the classification unit tests before `module_checks.py`.
+
 The module workflow uses `module_checks.py` to run vet and the full race suite.
 Each check retains a separate load admission: one-minute load below 20, up to
 120 seconds of waiting, with polls at most five seconds apart. Both checks are
