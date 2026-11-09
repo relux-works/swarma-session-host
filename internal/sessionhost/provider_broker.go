@@ -76,8 +76,8 @@ type inertPreparedProvider struct {
 	endpoint       *net.UnixConn // retained for cleanup only; never read or handed off
 	bootstrapDone  chan struct{}
 	stopEnrollment func() bool
-	closed         chan struct{}
-	closeErr       error // published by closed
+	closed         chan struct{} // watcher exit, not a cleanup timeout
+	closeErr       error         // published by closed
 }
 
 // Bootstrap performs the proposed client's nested provider recheck before the
@@ -211,8 +211,18 @@ func (p *inertPreparedProvider) watch() {
 }
 func (p *inertPreparedProvider) Close() error {
 	p.cancel()
-	<-p.closed
-	return p.closeErr
+	// The existing watcher owns cleanup, including the verifier owner's stop
+	// function. That function (or the Bootstrap caller) may ignore cancellation.
+	// Bound this wait without declaring the watcher joined or spawning another
+	// cleanup worker. A later Close can join it after the owner releases.
+	timer := time.NewTimer(pp.CleanupBound)
+	defer timer.Stop()
+	select {
+	case <-p.closed:
+		return p.closeErr
+	case <-timer.C:
+		return pp.ErrCleanup
+	}
 }
 
 type inertProviderEnrollment struct {

@@ -790,3 +790,141 @@ func TestInertProviderBrokerOwnerHookCleanupBound(t *testing.T) {
 	}
 	_ = a.Close()
 }
+
+// A distinct Done channel selects the verifier owner's AfterFunc method. Its
+// stop is real owned work: the test must release and join it even on failure.
+type inertPublishedHookStopContext struct {
+	context.Context
+	done, stopping, release, stopped chan struct{}
+	registrations, stops             atomic.Int32
+}
+
+func (c *inertPublishedHookStopContext) Done() <-chan struct{} { return c.done }
+func (c *inertPublishedHookStopContext) AfterFunc(f func()) func() bool {
+	c.registrations.Add(1)
+	stop := context.AfterFunc(c.Context, f)
+	return func() bool {
+		c.stops.Add(1)
+		close(c.stopping)
+		<-c.release
+		defer close(c.stopped)
+		return stop()
+	}
+}
+
+func TestInertProviderBrokerPublishedHookStop(t *testing.T) {
+	for _, blocking := range []bool{false, true} {
+		name := "ordinary"
+		if blocking {
+			name = "blocking"
+		}
+		t.Run(name, func(t *testing.T) {
+			m, q, f, b, _ := inertBrokerManager(t, "normal")
+			owner := &inertPublishedHookStopContext{
+				Context: context.Background(), done: make(chan struct{}),
+				stopping: make(chan struct{}), release: make(chan struct{}), stopped: make(chan struct{}),
+			}
+			var release sync.Once
+			unblock := func() { release.Do(func() { close(owner.release) }) }
+			defer unblock()
+			if !blocking {
+				unblock()
+			}
+			verify := b.verify
+			b.verify = func(ctx context.Context, wire pp.Enrollment) (NotificationEnrollment, error) {
+				e, err := verify(ctx, wire)
+				if err != nil {
+					return nil, err
+				}
+				retained := e.(bridgeEnrollmentFixture)
+				retained.ctx = owner
+				return retained, nil
+			}
+			a, p := prepareInert(t, m, q)
+			// Cleanup must release the fixture before any manager Close can join
+			// the watcher's call to the owner's stop, including on test failure.
+			defer func() { unblock(); _ = a.Close() }()
+			if err := a.Bootstrap(context.Background()); err != nil {
+				t.Fatal("positive published-owner enrollment", err)
+			}
+			if view, _ := a.Projection(); view.State != "ready" || !containsInert(f.snapshot(), "installed") {
+				t.Fatal("published-owner enrollment never became ready", view)
+			}
+			if got := owner.registrations.Load(); got != 1 {
+				t.Fatal("owner hook registration count", got)
+			}
+			if !blocking {
+				// Trigger the watcher independently of Close. Removing its stop
+				// call must fail this assertion even if cleanup otherwise joins.
+				p.cancel()
+				awaitInert(t, p.closed, "ordinary published-hook watcher")
+			} else {
+				closed := make(chan error, 1)
+				start := time.Now()
+				go func() { closed <- p.Close() }()
+				// Keep the remove-stop mutant bounded too: record the missing
+				// owner call, then still release and join all acquired work.
+				select {
+				case <-owner.stopping:
+				case <-time.After(3 * time.Second):
+					t.Error("watcher did not call published owner stop")
+				}
+				remaining := pp.CleanupBound + time.Second - time.Since(start)
+				timer := time.NewTimer(remaining)
+				joinedCaller := false
+				select {
+				case err := <-closed:
+					joinedCaller = true
+					if !errors.Is(err, pp.ErrCleanup) {
+						t.Error("blocked published owner reported joined cleanup", err)
+					}
+					t.Logf("Close with published owner stop blocked: %s", time.Since(start))
+				case <-timer.C:
+					t.Error("published owner stop exceeded CleanupBound plus 1s slack")
+				}
+				timer.Stop()
+				select {
+				case <-p.closed:
+					t.Error("watcher reported exit before published owner stop joined")
+				default:
+				}
+				select {
+				case <-owner.stopped:
+					t.Error("owner stop finished before release")
+				default:
+				}
+				p.mu.Lock()
+				closing, retained := p.closing, p.stopEnrollment != nil
+				p.mu.Unlock()
+				if !closing || !retained {
+					t.Error("blocked cleanup lost closing fence or owned hook", closing, retained)
+				}
+				unblock()
+				awaitInert(t, p.closed, "released published-hook watcher")
+				// If the old implementation exceeded the bound, its Close is
+				// still ours to join. A completed result was already consumed.
+				if !joinedCaller {
+					select {
+					case <-closed:
+					case <-time.After(3 * time.Second):
+						t.Fatal("released Close caller did not join")
+					}
+				}
+			}
+			// Completion and repeated Close must not call the owner twice.
+			for range 2 {
+				if err := p.Close(); errors.Is(err, pp.ErrCleanup) {
+					t.Error("released published owner cleanup did not join", err)
+				}
+			}
+			if got := owner.stops.Load(); got != 1 {
+				t.Error("published owner stop count", got)
+			} else {
+				awaitInert(t, owner.stopped, "actual published owner stop completion")
+			}
+			if err := p.client.Close(context.Background()); errors.Is(err, pp.ErrCleanup) {
+				t.Error("released client callback did not join", err)
+			}
+		})
+	}
+}
