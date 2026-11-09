@@ -104,6 +104,9 @@ The runner plan is one JSON object on stdin. For an inert JSON child:
 
 Binary and cwd must be absolute, env must be an explicit non-null array, and
 args are bounded to 32 entries. No parent environment is inherited.
+When the plan launches `curator-run`, its explicit env `PATH` must include
+`~/.local/bin` (as the expanded absolute path) so `curator-run` can find the
+Core curator; without it the launch refuses with `defaults_config_invalid`.
 Start runner and host in separate foreground processes. [C04](evidence.md#c04)
 
 ```sh
