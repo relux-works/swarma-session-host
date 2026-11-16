@@ -27,12 +27,29 @@ func debugFixture(t *testing.T) *Host {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	h := &Host{store: s, ctx: ctx, cancel: cancel, kick: make(chan struct{}, 1), state: State{Version: 1, Execution: "fixture", RunnerInstance: "runner", Adapter: "fixture", Selection: Selection{"provider", "model", "effort"}, Epoch: 1, Fence: "open", InputState: InputIdle, DebugAttach: true, Debug: &debugMetadata{Writer: "automatic"}}}
+	// The fixture registers the accountable manager/owner through the private
+	// composition seam; registration is not an attachment right.
+	h := &Host{store: s, ctx: ctx, cancel: cancel, kick: make(chan struct{}, 1), debugRegistry: debugRegistry{"manager", "owner"}, state: State{Version: 1, Execution: "fixture", RunnerInstance: "runner", Adapter: "fixture", Selection: Selection{"provider", "model", "effort"}, Epoch: 1, Fence: "open", InputState: InputIdle, DebugAttach: true, Debug: &debugMetadata{Writer: "automatic"}}}
 	if err := h.openDebug(false); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cancel(); h.debug.close(); s.close() })
 	return h
+}
+
+// debugState returns the complete private state under the host lock; tests use
+// it where the public Snapshot projection deliberately omits members.
+func debugState(h *Host) State {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return cloneState(h.state)
+}
+
+// debugText submits one ordinary follow-up intent bound to the given writer
+// revision and last terminal turn, returning only its admission result.
+func debugText(h *Host, token, id, text string, revision uint64, turn string) error {
+	_, err := h.debugInput(token, debugInputIntent{Kind: "follow_up", ID: id, Text: text, ExpectedRevision: revision, ExpectedTurn: turn})
+	return err
 }
 func debugToken(t *testing.T, h *Host, rights ...string) string {
 	t.Helper()
@@ -131,7 +148,7 @@ func TestSecondAttacherAndWriterSkeleton(t *testing.T) {
 	if h.debug.viewer != token {
 		t.Fatal("second attach stole slot")
 	}
-	debugWant(t, h.debugInput(token, "follow_up", 0), "input_writer_required")
+	debugWant(t, debugText(h, token, "reply-1", "hello", 0, ""), "input_writer_required")
 	debugWant(t, h.debugControl(token, "claim", 0), "")
 	before := debugDisk(t, h)
 	debugWant(t, h.debugControl(token, "claim", 0), "input_writer_required")
@@ -145,8 +162,14 @@ func TestSecondAttacherAndWriterSkeleton(t *testing.T) {
 		t.Fatal("detach resumed or stopped")
 	}
 }
+
+// GrantRightsByOperation: with the same registered actor, fresh binding and an
+// otherwise eligible checkpoint, every private operation lacking its C07 right
+// returns V23 before any writer/terminal/grant/answer/stop mutation or journal
+// append, while the minimal sufficient grant passes the same rights gate. The
+// unsupported-effect results for text/answer are the inert default, not D.
 func TestGrantRightsByOperationSkeleton(t *testing.T) {
-	for _, op := range []string{"claim", "renew", "yield", "resume_automation", "ack", "disposition", "follow_up", "answer_interaction", "stop"} {
+	for _, op := range []string{"claim", "renew", "yield", "resume_automation", "yield_and_resume", "detach_with_resume", "ack", "disposition", "follow_up", "answer_interaction", "stop", "issue_grant"} {
 		t.Run(op, func(t *testing.T) {
 			for _, sufficient := range []bool{false, true} {
 				t.Run(fmt.Sprint(sufficient), func(t *testing.T) {
@@ -160,21 +183,34 @@ func TestGrantRightsByOperationSkeleton(t *testing.T) {
 							rights = append(rights, "writer_control", "native_response")
 						case "stop":
 							rights = append(rights, "stop")
-						case "ack":
+						case "ack", "issue_grant":
 						default:
 							rights = append(rights, "writer_control")
 						}
 					}
+					if op == "issue_grant" {
+						// Administrative actions need delegation, never attachment rights.
+						rights = []string{"view", "writer_control", "text", "native_response", "stop"}
+					}
 					token := debugView(t, h, rights...)
-					if op == "renew" || op == "yield" || op == "follow_up" || op == "answer_interaction" {
+					if op == "renew" || op == "yield" || op == "yield_and_resume" || op == "follow_up" || op == "answer_interaction" {
 						h.state.Debug.Writer = "claimed"
 						h.debug.leaseUntil = time.Now().Add(time.Minute)
 					}
 					h.state.Debug.Results = []debugResult{{ID: "result", Thread: "thread", Turn: "turn", Outcome: "completed", Revision: 1, NotificationPending: true}}
-					if op == "resume_automation" {
+					if op == "resume_automation" || op == "yield_and_resume" || op == "detach_with_resume" {
 						h.state.Debug.Results[0].Permitted = true
 					}
 					debugWant(t, h.persistLocked(h.state), "")
+					interaction := ""
+					if op == "answer_interaction" {
+						// An answer needs the host's current native thread to be the
+						// request's thread; the fixture establishes it before observing.
+						h.state.Protocol = &ProtocolState{View: ap.View{NativeSession: "thread"}}
+						var err error
+						interaction, err = h.debugObserveInteraction("thread", "turn", 7, "item/tool/requestUserInput", []string{"yes", "no"}, false)
+						debugWant(t, err, "")
+					}
 					before := cloneState(h.state)
 					used := h.debug.journal.used
 					var err error
@@ -183,19 +219,27 @@ func TestGrantRightsByOperationSkeleton(t *testing.T) {
 						err = h.debugDisposition(token, "result", 1, true, false)
 					case "disposition":
 						err = h.debugDisposition(token, "result", 1, false, true)
-					case "follow_up", "answer_interaction":
-						err = h.debugInput(token, op, 0)
+					case "follow_up":
+						err = debugText(h, token, "reply-1", "hello", 0, "turn")
+					case "answer_interaction":
+						_, err = h.debugInput(token, debugInputIntent{Kind: op, ID: "answer-1", ExpectedTurn: "turn", Interaction: interaction, RequestID: 7, OptionsDigest: debugOptionsDigest([]string{"yes", "no"}), Option: "yes"})
 					case "stop":
 						ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 						defer cancel()
 						err = h.debugStop(ctx, token)
+					case "issue_grant":
+						if sufficient {
+							_, err = h.debugIssueGrantTo(debugAuthority{"owner", "owner", 1}, debugAuthority{"manager", "manager", 1}, h.debugBindingLocked(), []string{"view"})
+						} else {
+							_, err = h.debugIssueGrantTo(debugAuthority{"manager", "manager", 1}, debugAuthority{"owner", "owner", 1}, h.debugBindingLocked(), []string{"view"})
+						}
 					default:
 						err = h.debugControl(token, op, 0)
 					}
 					if !sufficient && op != "ack" {
 						debugWant(t, err, "input_right_required")
-						if !reflect.DeepEqual(before, h.state) || used != h.debug.journal.used {
-							t.Fatal("denied operation mutated state/journal")
+						if !reflect.DeepEqual(before, h.state) || used != h.debug.journal.used || h.debug.viewer != token || len(h.debug.grants) != 1 {
+							t.Fatal("denied operation mutated state/journal/grants")
 						}
 						return
 					}
@@ -207,6 +251,12 @@ func TestGrantRightsByOperationSkeleton(t *testing.T) {
 						expected = "interaction_unsupported"
 					}
 					debugWant(t, err, expected)
+					if op == "detach_with_resume" && (h.debug.viewer != "" || h.state.Debug.Writer != "automatic") {
+						t.Fatal("detach-with-resume kept the view or writer hold")
+					}
+					if op == "yield_and_resume" && h.state.Debug.Writer != "automatic" {
+						t.Fatal("yield-and-resume did not resume")
+					}
 				})
 			}
 		})
@@ -215,6 +265,8 @@ func TestGrantRightsByOperationSkeleton(t *testing.T) {
 	_, err := h.debugIssueGrant(debugAuthority{"foreign", "worker", 1}, []string{"view"})
 	debugWant(t, err, "attach_unauthorized")
 	_, err = h.debugIssueGrant(debugAuthority{"manager", "manager", 1}, []string{"view", "admin"})
+	debugWant(t, err, "input_invalid")
+	_, err = h.debugIssueGrant(debugAuthority{"manager", "manager", 1}, []string{"view", "view"})
 	debugWant(t, err, "input_invalid")
 	noView := debugToken(t, h, "text")
 	debugWant(t, h.debugAttachView(noView), "attach_unauthorized")
@@ -270,21 +322,36 @@ func TestStopRightIndependentOfWriterSkeleton(t *testing.T) {
 		t.Fatal("stop purged journal")
 	}
 }
+
+// BusyAndUnsupportedInput (inert default): a stale writer revision or terminal
+// turn is V11, a busy target V10, unqualified steer/interrupt/queue and the
+// default follow-up route V19, a missing answer right V23, an unknown fence V12
+// and stop V13; none of them queues, retargets or journals any input.
 func TestBusyAndUnsupportedInputSkeleton(t *testing.T) {
 	h := debugFixture(t)
 	token := debugView(t, h, "view", "writer_control", "text")
 	debugWant(t, h.debugControl(token, "claim", 0), "")
 	rev := h.state.Debug.WriterRevision
-	debugWant(t, h.debugInput(token, "follow_up", rev-1), "input_observation_stale")
+	used := h.debug.journal.used
+	debugWant(t, debugText(h, token, "reply", "hello", rev-1, ""), "input_observation_stale")
+	debugWant(t, debugText(h, token, "reply", "hello", rev, "newer-turn"), "input_observation_stale")
 	h.state.InputState = InputBusy
-	debugWant(t, h.debugInput(token, "follow_up", rev), "input_busy")
+	debugWant(t, debugText(h, token, "reply", "hello", rev, ""), "input_busy")
 	h.state.InputState = InputIdle
-	debugWant(t, h.debugInput(token, "follow_up", rev), "input_operation_unsupported")
-	debugWant(t, h.debugInput(token, "answer_interaction", rev), "input_right_required")
+	for _, kind := range []string{"steer", "interrupt", "queue"} {
+		_, err := h.debugInput(token, debugInputIntent{Kind: kind, ID: "reply", Text: "hello", ExpectedRevision: rev})
+		debugWant(t, err, "input_operation_unsupported")
+	}
+	debugWant(t, debugText(h, token, "reply", "hello", rev, ""), "input_operation_unsupported")
+	_, err := h.debugInput(token, debugInputIntent{Kind: "answer_interaction", ID: "answer", ExpectedRevision: rev, Interaction: "interaction-01", RequestID: 1, OptionsDigest: strings.Repeat("a", 64), Option: "yes"})
+	debugWant(t, err, "input_right_required")
 	h.state.Fence = "unknown"
-	debugWant(t, h.debugInput(token, "follow_up", rev), "input_fenced")
+	debugWant(t, debugText(h, token, "reply", "hello", rev, ""), "input_fenced")
 	h.state.StopRequested = true
-	debugWant(t, h.debugInput(token, "follow_up", rev), "input_stopped")
+	debugWant(t, debugText(h, token, "reply", "hello", rev, ""), "input_stopped")
+	if used != h.debug.journal.used || len(h.state.Debug.Inputs) != 0 {
+		t.Fatal("refused input reserved or journaled")
+	}
 }
 func TestJournalSenderTimeBeforeEffectSkeleton(t *testing.T) {
 	h := debugFixture(t)
@@ -386,10 +453,17 @@ func TestJournalPrivacyAndCrashSkeleton(t *testing.T) {
 			}
 			j, err := openDebugJournal(root, mode == "replacement")
 			if mode == "valid" || mode == "replacement" {
+				// Unframed retained bytes are terminated, preserved and reported
+				// torn: new effects hold, but stop/control appends stay reachable.
 				debugWant(t, err, "")
 				defer j.close()
-				if mode == "replacement" {
-					debugWant(t, j.append(debugJournalEntry{}, false, time.Now()), "input_storage_unavailable")
+				if !j.torn {
+					t.Fatal("unframed journal not reported torn")
+				}
+				debugWant(t, j.append(debugJournalEntry{Kind: "stop"}, true, time.Now()), "")
+				data, readErr := os.ReadFile(path)
+				if readErr != nil || !bytes.HasPrefix(data, []byte("private-input\n")) {
+					t.Fatal("torn evidence rewritten")
 				}
 			} else {
 				debugWant(t, err, "input_storage_unavailable")
@@ -402,10 +476,10 @@ func TestRetirementPurgeProofSkeleton(t *testing.T) {
 	token := debugView(t, h, "view", "writer_control")
 	h.debug.tail.observe([]byte(`{"method":"item/agentMessage/delta","params":{"threadId":"thread","turnId":"turn","itemId":"item","delta":"output-canary"}}`))
 	debugWant(t, h.debugControl(token, "claim", 0), "")
-	debugWant(t, h.debugRetire(), "input_fenced")
+	debugWant(t, h.debugRetire(false), "input_fenced")
 	h.state.StopRequested = true
 	h.state.Records = []Record{{State: "unknown"}}
-	debugWant(t, h.debugRetire(), "input_effect_unknown")
+	debugWant(t, h.debugRetire(false), "input_effect_unknown")
 	h.state.Records = nil
 	path := filepath.Join(h.debug.journal.dir, "input.journal")
 	heldFD, err := os.Open(path)
@@ -419,14 +493,14 @@ func TestRetirementPurgeProofSkeleton(t *testing.T) {
 	if err := os.WriteFile(extra, []byte("pending-canary"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	debugWant(t, h.debugRetire(), "input_storage_unavailable")
+	debugWant(t, h.debugRetire(false), "input_storage_unavailable")
 	if h.state.Debug.Retired {
 		t.Fatal("purge failure declared retirement")
 	}
 	if err := os.Remove(extra); err != nil {
 		t.Fatal(err)
 	}
-	debugWant(t, h.debugRetire(), "")
+	debugWant(t, h.debugRetire(false), "")
 	if !h.state.Debug.Retired || h.debug.tail.used != 0 || h.debug.tail.events.Len() != 0 || len(h.debug.grants) != 0 || h.debug.journal.file != nil {
 		t.Fatal("retirement left host custody")
 	}
@@ -444,7 +518,7 @@ func TestTerminalFactBlocksQueuedNoticeSkeleton(t *testing.T) {
 	// This is the same host transition hook used before protocol completion idle
 	// is committed. A view/claim is deliberately absent when the fact arrives.
 	next := cloneState(h.state)
-	debugWant(t, h.debugTerminalLocked(&next, "thread", "turn", "completed"), "")
+	debugWant(t, h.debugTerminalLocked(&next, "", "thread", "turn", "completed"), "")
 	debugWant(t, h.persistLocked(next), "")
 	if h.debugAutomaticLocked() {
 		t.Fatal("terminal did not block automatic delivery")

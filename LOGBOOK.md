@@ -3,6 +3,13 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-11-16
+
+### Private input custody is a two-record transaction, not a flag
+- FINDING: A replacement that merely marked a nonempty private journal failed could neither prove nor disprove an issued effect, and blocked the stop/revoke frames that cleanup needs.
+- FIX: Journal frames reference the snapshot by sequence/digest; replacement reconstructs counters and receipts, turns an issued marker without receipt into an unknown effect, retains frames with no snapshot reference as unknown, terminates an unframed tail and marks the journal torn. Torn/unknown state holds new effects and automatic delivery; stop, revocation and controls stay reachable.
+- VALIDATION LIMIT: Inert fixture effects and owned same-UID files only; no native adapter, launcher or alarm sink is exercised.
+
 ## 2026-10-29
 
 ### Admission is an execution binding, not a host-controller lifetime

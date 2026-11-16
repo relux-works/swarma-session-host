@@ -332,6 +332,7 @@ func TestJournalCapAndReserveProtectedObligationsSkeleton(t *testing.T) {
 	h.state.Epoch = ^uint64(0)
 	h.state.Debug.WriterRevision = ^uint64(0) - 1
 	a := debugAuthority{strings.Repeat("m", 128), "manager", h.state.Epoch}
+	h.debugRegistry = debugRegistry{a.actor, "owner"}
 	var tokens []string
 	for range 16 {
 		token, err := h.debugIssueGrant(a, []string{"view", "stop"})
@@ -355,7 +356,7 @@ func TestJournalCapAndReserveProtectedObligationsSkeleton(t *testing.T) {
 	debugWant(t, err, "input_capacity_exceeded")
 	for i := range MaxRecords {
 		next := cloneState(h.state)
-		debugWant(t, h.debugTerminalLocked(&next, "thread", "turn", "completed"), "")
+		debugWant(t, h.debugTerminalLocked(&next, "", "thread", "turn", "completed"), "")
 		debugWant(t, h.persistLocked(next), "")
 		if len(h.state.Debug.Results) != i+1 {
 			t.Fatal("terminal fact lost")
@@ -366,7 +367,7 @@ func TestJournalCapAndReserveProtectedObligationsSkeleton(t *testing.T) {
 	}
 	before := j.sequence
 	next := cloneState(h.state)
-	debugWant(t, h.debugTerminalLocked(&next, "thread", "turn", "completed"), "input_capacity_exceeded")
+	debugWant(t, h.debugTerminalLocked(&next, "", "thread", "turn", "completed"), "input_capacity_exceeded")
 	if j.sequence != before {
 		t.Fatal("terminal overflow accepted")
 	}

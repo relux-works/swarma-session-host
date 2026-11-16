@@ -144,6 +144,11 @@ func (r *debugTail) read(after uint64) debugTailRead {
 	return out
 }
 func (r *debugTail) expire() { r.mu.Lock(); defer r.mu.Unlock(); r.expireLocked() }
+func (r *debugTail) frontier() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.next
+}
 func (r *debugTail) close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -61,6 +61,14 @@ continuing manager, with an executable plugin transport and inert acceptance
 adapters. No productive ordinary owner or provider default is installed.
 Broker enrollment, designated child transfer and live notification delivery
 remain unqualified.
+The host-private part of the [debug attach contract](docs/debug-attach-contract.md)
+is implemented behind unexported seams only: immutable admission, registered
+manager/owner grants with independent rights, one viewer slot, a bounded
+volatile tail, a private 4 MiB journal with receipts and recovery, terminal
+facts that block automatic notices until explicit disposition, inert effect
+admission, retirement purge and real inert-child descriptor controls. See the
+[readiness note](docs/debug-attach-readiness.md); launcher schema, native
+text/answer effects, alarm sinks and rollout remain separate units.
 A bounded Codex 0.167.0 app-server
 adapter supports synthetic no-tool notices and retained-session host replacement.
 An explicit [work-reference mode](docs/work-reference.md) submits an admitted
@@ -152,6 +160,7 @@ accounts or shared services are accessed.
 | Notification stream fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestNotificationStream' ./internal/sessionhost` | Owned inert Unix socketpairs: serial calls, idle versus call expiry, framing rejection, retained intent and single-attachment controls; no enrollment or native runtime |
 | Inert broker docking fixture | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run '^TestSourceNotificationDock' ./internal/sessionhost`; [compiled helper interface](docs/notification-docking-fixture.md) | Host-only setup, acceptance/retry, refusal and cleanup checks; external client docking requires its separately supplied fixture |
 | Manager/broker fixtures | `GOMAXPROCS=2 GOWORK=off go test -p 1 -race -count=1 -run '^TestManager|^TestPublicManager' ./internal/sessionhost ./manager` | Owned inert Core subprocess and broker fixtures; correlation, refusal, callback ordering and finite cleanup; no live provider/native call |
+| Debug-attach host fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'Skeleton$|^TestAttach|^TestGrant|^TestJournal|^TestTerminal|^TestClaimVsNotice|^TestRetry|^TestRevoke|^TestNativeAnswer|^TestText|^TestRetirement|^TestExportAndSink|^TestDisabledExecution|^TestDetachLeaves|^TestLeaseYield|^TestOrdinaryStatus|^TestReceiptKey' ./internal/sessionhost`; [readiness note](docs/debug-attach-readiness.md) | Private grants/rights, bounded tail and journal, terminal facts, inert effect receipts, recovery, retirement and real inert-child argv/env/FD controls on stdout; no launcher, native text route or alarm sink |
 | Cooperative stop fixtures | `CGO_ENABLED=1 GOMAXPROCS=2 GOTOOLCHAIN=local GOWORK=off go test -p 1 -race -count=1 -run 'TestCooperativeStop|TestOriginalChildSignalGuards|TestForcedStopAndReapedHandle' ./internal/runner` | Inert owned-child TERM, legacy EOF, retry, cutoff and signal-guard evidence on stdout; no native cleanup claim |
 | Runner identify qualification | `CGO_ENABLED=1 GOTOOLCHAIN=local go test -p 1 -run 'TestIdentify|TestPeerIdentity' ./internal/runner ./internal/localipc` | Strict wire, owned sockets, lifecycle/non-effect and post-reply ordering fixtures on stdout; external readers remain unqualified |
 | macOS ps | `/bin/ps -p PID -o stat=` in `TestOwnedKernelChildLifecycle` | Non-reaping state observation of the explicitly owned child; no process discovery |

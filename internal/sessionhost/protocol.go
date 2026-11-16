@@ -45,6 +45,8 @@ func cloneState(s State) State {
 	if s.Debug != nil {
 		d := *s.Debug
 		d.Results = slices.Clone(d.Results)
+		d.Inputs = slices.Clone(d.Inputs)
+		d.Interactions = slices.Clone(d.Interactions)
 		s.Debug = &d
 	}
 	s.Records = slices.Clone(s.Records)
@@ -232,7 +234,7 @@ func (h *Host) persistTransitionLocked(t ap.Transition) error {
 				next.Fence = "unknown"
 			}
 			if next.DebugAttach && r.Outcome != h.state.Records[i].Outcome {
-				if err := h.debugTerminalLocked(&next, f.NativeSession, f.NativeID, outcome); err != nil {
+				if err := h.debugTerminalLocked(&next, r.Notice.ID, f.NativeSession, f.NativeID, outcome); err != nil {
 					return err
 				}
 			}
@@ -246,7 +248,17 @@ func (h *Host) persistTransitionLocked(t ap.Transition) error {
 	if reflect.DeepEqual(next, h.state) {
 		return nil
 	}
-	return h.persistLocked(next)
+	prior := 0
+	if h.state.Debug != nil {
+		prior = len(h.state.Debug.Results)
+	}
+	if err := h.persistLocked(next); err != nil {
+		return err
+	}
+	// The terminal fact, its block and its notification debt are durable
+	// before the content-free notifier learns about them.
+	h.debugAnnounceLocked(prior)
+	return nil
 }
 
 func (h *Host) failProtocol() {

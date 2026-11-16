@@ -45,6 +45,14 @@
   observations without raw questions and never answers them. Notification
   routing, question retrieval under existing custody and approval grants remain
   unimplemented; a durable observation alone is not a delivered escalation.
+- **Debug attach beyond the host:** the host-private part B of the debug attach
+  contract is implemented with inert fixture effects only. The launcher
+  schema/capability and public V01–V08 receiver (C), a qualified native
+  text/answer adapter and the required in-task deletion approval (D), live
+  terminal/busy alarm sinks and escalation (E), real process/home-lease bind
+  (F) and the integrated Mac rollout gate (G) remain unimplemented; the default
+  native text and answer routes stay unsupported until D qualifies them. The
+  manager/owner registration seam has no production caller yet.
 - **Production control security:** kernel UID checks in M1 authenticate an OS
   user, not agents sharing that user. Admit session/caller-scoped capabilities
   and cross-UID qualification before real deployment. No credential provisioning

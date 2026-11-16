@@ -16,6 +16,16 @@ type store struct {
 	dir   string
 	lock  *os.File
 	fresh bool
+	// sync is the durability primitive for every snapshot commit boundary;
+	// fixtures inject failures here, production uses the default.
+	sync func(*os.File) error
+}
+
+func (s *store) fsync(f *os.File) error {
+	if s.sync != nil {
+		return s.sync(f)
+	}
+	return f.Sync()
 }
 
 func openStore(dir string) (*store, error) {
@@ -108,7 +118,7 @@ func (s *store) write(state State) error {
 		return errors.New("state_write_failed")
 	}
 	_, writeErr := pending.Write([]byte("update-in-progress\n"))
-	syncErr := pending.Sync()
+	syncErr := s.fsync(pending)
 	closeErr := pending.Close()
 	if writeErr != nil || syncErr != nil || closeErr != nil || s.syncDirectory() != nil {
 		return errors.New("state_sync_unknown")
@@ -123,7 +133,7 @@ func (s *store) write(state State) error {
 		err = io.ErrShortWrite
 	}
 	if err == nil {
-		err = file.Sync()
+		err = s.fsync(file)
 	}
 	closeErr = file.Close()
 	if err != nil || closeErr != nil {
@@ -146,8 +156,9 @@ func (s *store) syncDirectory() error {
 	if err != nil {
 		return errors.New("state_sync_unknown")
 	}
-	defer dir.Close()
-	if err := dir.Sync(); err != nil {
+	syncErr := s.fsync(dir)
+	closeErr := dir.Close()
+	if syncErr != nil || closeErr != nil {
 		return errors.New("state_sync_unknown")
 	}
 	return nil

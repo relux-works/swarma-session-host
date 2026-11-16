@@ -156,6 +156,12 @@ type Host struct {
 	notificationStream  *notificationAttachment
 	notificationManager *managedNotification
 	debug               *debugAttachment
+	// debugRegistry, debugEffects and debugNotify are private composition
+	// seams that survive debug custody replacement. No production adapter or
+	// sink is installed here; nil keeps native text/answer effects unsupported.
+	debugRegistry debugRegistry
+	debugEffects  debugEffector
+	debugNotify   func(debugNotification)
 }
 
 func validNotice(n Notice) bool { return scalar.MatchString(n.ID) && scalar.MatchString(n.Reference) }
@@ -448,10 +454,17 @@ func (h *Host) persistLocked(next State) error {
 	return nil
 }
 
+// Snapshot is the ordinary status projection. Debug custody is reduced to its
+// allowlisted public members; private reconciliation references stay in the
+// durable state file and the journal.
 func (h *Host) Snapshot() State {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return cloneState(h.state)
+	now := time.Now()
+	if h.debug != nil {
+		now = h.debug.now()
+	}
+	return debugPublicState(cloneState(h.state), now)
 }
 
 func (h *Host) Enqueue(notice Notice) (Record, error) {
@@ -692,8 +705,7 @@ func (h *Host) Stop(ctx context.Context) (runner.Response, error) {
 	next.StopRequested = true
 	if next.DebugAttach {
 		next = cloneState(next)
-		next.Debug.Writer = "stopped"
-		next.Debug.WriterRevision++
+		debugStopLocked(&next)
 	}
 	if h.state.Fence == "unknown" {
 		next.Fence = "unknown"
