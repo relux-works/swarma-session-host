@@ -492,3 +492,201 @@ func TestLinuxV2EffectiveUIDExpectation(t *testing.T) {
 		t.Fatal("wrong pid accepted")
 	}
 }
+
+// Fresh live evidence uses the original atomic pidfd and raw stat starttime.
+// A still-owned zombie may pass identify v2, but cannot supply live evidence.
+func TestHeldProcessKernelLifecycle(t *testing.T) {
+	s, open := startV2KernelRunner(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first, err := s.ProcessEvidence(ctx)
+	if err != nil || first.PID != s.pid || first.Execution != s.cfg.Execution ||
+		first.StartTicks != strconv.FormatUint(originalStartTicks(t, s.pid), 10) ||
+		first.RealUID != uint32(os.Getuid()) || first.EffectiveUID != uint32(os.Geteuid()) {
+		t.Fatal("live owned evidence disagrees with kernel", first, err)
+	}
+	s.processMu.Lock()
+	initial := s.linux.started
+	s.linux.started.StartTicks = "1"
+	s.processMu.Unlock()
+	if _, err := s.ProcessEvidence(ctx); !errors.Is(err, errChildBirthUnavailable) {
+		t.Fatal("different birth accepted under original handle", err)
+	}
+	s.processMu.Lock()
+	s.linux.started = initial
+	s.processMu.Unlock()
+	if fresh, err := s.ProcessEvidence(ctx); err != nil || fresh != first {
+		t.Fatal("positive control failed after birth mismatch", fresh, err)
+	}
+	if err := s.child.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	fd := ownedPIDFDs(t, s.linux.identity)[0]
+	deadline := time.Now().Add(2 * time.Second)
+	for pidfdEvents(t, fd) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("exit readiness missing")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if snapshot, _ := s.identifyV2Snapshot(v2RequestFor(s)); snapshot.Result != "verified" {
+		t.Fatal("ownership snapshot unexpectedly changed")
+	}
+	if _, err := s.ProcessEvidence(ctx); !errors.Is(err, errChildBirthUnavailable) {
+		t.Fatal("owned zombie exposed as live", err)
+	}
+	open()
+	select {
+	case <-s.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("original reaper did not join")
+	}
+	if _, err := s.ProcessEvidence(ctx); !errors.Is(err, errChildBirthUnavailable) {
+		t.Fatal("reaped PID reacquired", err)
+	}
+}
+
+// Invalid observation contexts, a busy reaper lock, and absent spawn capture
+// all refuse. Valid observations on the same live selected child still work.
+func TestHeldProcessRequiresCaptureAndBoundedOwnership(t *testing.T) {
+	s, open := startV2KernelRunner(t)
+	defer open()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := s.ProcessEvidence(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ProcessEvidence(context.Background()); !errors.Is(err, errChildBirthUnavailable) {
+		t.Fatal("unbounded observation accepted", err)
+	}
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	if _, err := s.ProcessEvidence(cancelled); !errors.Is(err, errChildBirthUnavailable) {
+		t.Fatal("cancelled observation accepted", err)
+	}
+	s.processMu.Lock()
+	busyContext, cancelBusy := context.WithTimeout(ctx, 10*time.Millisecond)
+	_, busyErr := s.ProcessEvidence(busyContext)
+	cancelBusy()
+	s.processMu.Unlock()
+	if !errors.Is(busyErr, errChildBirthUnavailable) {
+		t.Fatal("busy ownership accepted", busyErr)
+	}
+	ordinary, err := startTestRunner(t, testConfig(t, "echo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ordinary.ProcessEvidence(ctx); !errors.Is(err, errChildBirthUnavailable) {
+		t.Fatal("missing birth capture repaired by PID", err)
+	}
+	if _, err := s.ProcessEvidence(ctx); err != nil {
+		t.Fatal("valid control lost", err)
+	}
+}
+
+// An actual exec keeps pid/birth/pidfs identity but changes the running image.
+// It therefore invalidates retained process evidence without reacquisition.
+func TestHeldProcessExecChangesImage(t *testing.T) {
+	cfg := testConfig(t, "echo")
+	cfg.IdentifyV2 = true
+	cfg.Plan.Binary = "/bin/sh"
+	cfg.Plan.Args = []string{"-c", "read line; exec /bin/cat"}
+	s, err := startTestRunner(t, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	before, err := s.ProcessEvidence(ctx)
+	if err != nil {
+		t.Fatal("pre-exec control", err)
+	}
+	ticks := originalStartTicks(t, s.pid)
+	c := testClient(t, cfg)
+	claim := call(t, c, Request{Op: "claim", Execution: cfg.Execution, Epoch: 1}, "ok")
+	call(t, c, Request{Op: "write", Execution: cfg.Execution, Epoch: claim.Epoch, Sequence: 1, Data: []byte("handoff\n")}, "written")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		image, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", s.pid))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasSuffix(image, "/cat") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("owned exec did not reach cat")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if s.pid != before.PID || originalStartTicks(t, s.pid) != ticks {
+		t.Fatal("fixture did not preserve birth across exec")
+	}
+	if _, err := s.ProcessEvidence(ctx); !errors.Is(err, errChildBirthUnavailable) {
+		t.Fatal("changed executable retained proof", err)
+	}
+}
+
+// Parsing preserves distinct real/effective credentials and stat field 22,
+// even with spaces, parentheses and newlines in comm. Malformed neighbors
+// refuse rather than shifting to another field or credential.
+func TestHeldLinuxKernelFieldParsing(t *testing.T) {
+	valid := "123 (name ) with\nspace) S " + strings.Repeat("0 ", 18) + "123456\n"
+	if ticks, ok := linuxStartTicks(valid, 123); !ok || ticks != "123456" {
+		t.Fatal("raw stat field22 rejected", ticks, ok)
+	}
+	for _, invalid := range []string{
+		strings.Replace(valid, "123456", "0123456", 1),
+		strings.Replace(valid, "123456", "18446744073709551616", 1),
+		strings.Replace(valid, "123456", "12x", 1),
+		strings.Replace(valid, ") S ", ") Z ", 1),
+		strings.Replace(valid, "123 (", "124 (", 1),
+		"123 (short) S 0",
+	} {
+		if _, ok := linuxStartTicks(invalid, 123); ok {
+			t.Fatal("malformed stat accepted", invalid)
+		}
+	}
+	status := "Name:\tfixture\nUid:\t24\t42\t43\t44\n"
+	if real, effective, ok := linuxUIDs(status); !ok || real != 24 || effective != 42 {
+		t.Fatal("real/effective uid confused", real, effective, ok)
+	}
+	for _, invalid := range []string{
+		"Name:\tfixture\n", status + status,
+		"Uid:\t24\t42\n", "Uid:\t-1\t42\t43\t44\n",
+		"Uid:\t4294967295\t42\t43\t44\n", "Uid:\t24\twrong\t43\t44\n",
+	} {
+		if _, _, ok := linuxUIDs(invalid); ok {
+			t.Fatal("malformed uid evidence accepted", invalid)
+		}
+	}
+}
+
+// Brief contention with the existing reaper waits inside the request budget.
+// The neighboring timeout control above proves that waiting stays bounded.
+func TestHeldProcessWaitsForExistingOwnership(t *testing.T) {
+	s, open := startV2KernelRunner(t)
+	defer open()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	s.processMu.Lock()
+	entered := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { close(entered); _, err := s.ProcessEvidence(ctx); done <- err }()
+	<-entered
+	select {
+	case err := <-done:
+		s.processMu.Unlock()
+		t.Fatal("briefly busy ownership refused before its deadline", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	s.processMu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal("ownership remained unavailable after release", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("bounded ownership observation did not join")
+	}
+}

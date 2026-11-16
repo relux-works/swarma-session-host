@@ -1,6 +1,9 @@
 package runner
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -538,7 +541,7 @@ func captureLinuxOriginal(pid, pidfd int) (result linuxOriginal) {
 	if err != nil {
 		return fail(err)
 	}
-	defer syscall.Close(proc)
+	held.fds = append(held.fds, proc)
 	if _, err = fdInode(proc, procfsMagic); err != nil {
 		return fail(err)
 	}
@@ -628,5 +631,163 @@ func captureLinuxOriginal(pid, pidfd int) (result linuxOriginal) {
 	}
 	result.identity = LinuxPIDFSIdentity{"linux-pidfs-v1", boot[:36], strconv.FormatUint(inode, 10), scopes[0], scopes[1]}
 	result.err = nil
+	// Pin the original child's genuine proc directory while the atomic pidfd
+	// and the exclusive unreaped-child ownership are still retained.
+	child, err := syscall.Openat(proc, strconv.Itoa(pid), syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return result // identify v2 remains an ownership snapshot, even for zombies.
+	}
+	held.fds = append(held.fds, child)
+	if _, err := fdInode(child, procfsMagic); err != nil {
+		return result
+	}
+	read := func(ctx context.Context) (OwnedProcessEvidence, error) {
+		return readHeldLinuxProcess(ctx, pid, pidfd, proc, child)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if initial, err := read(ctx); err == nil {
+		result.started, result.process = initial, read
+	}
 	return result
+}
+
+func linuxStartTicks(text string, pid int) (string, bool) {
+	end := strings.LastIndexByte(text, ')')
+	if end < 0 || !strings.HasPrefix(text, strconv.Itoa(pid)+" (") {
+		return "", false
+	}
+	fields := strings.Fields(text[end+1:])
+	if len(fields) < 20 || fields[0] == "Z" || fields[0] == "X" || fields[0] == "x" {
+		return "", false
+	}
+	ticks := fields[19] // state is field 3, starttime is field 22.
+	if len(ticks) == 0 || len(ticks) > 20 || len(ticks) > 1 && ticks[0] == '0' {
+		return "", false
+	}
+	for _, c := range ticks {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+	}
+	_, err := strconv.ParseUint(ticks, 10, 64)
+	return ticks, err == nil
+}
+
+func linuxUIDs(text string) (real, effective uint32, ok bool) {
+	seen := false
+	for _, line := range strings.Split(text, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 || f[0] != "Uid:" {
+			continue
+		}
+		if seen || len(f) != 5 {
+			return 0, 0, false
+		}
+		seen = true
+		for i, raw := range f[1:] {
+			n, err := strconv.ParseUint(raw, 10, 32)
+			if err != nil || n == 1<<32-1 {
+				return 0, 0, false
+			}
+			if i == 0 {
+				real = uint32(n)
+			}
+			if i == 1 {
+				effective = uint32(n)
+			}
+		}
+	}
+	return real, effective, seen
+}
+
+func heldLinuxExecutable(ctx context.Context, child int) (string, error) {
+	// exe is the kernel magic link beneath the pinned child's proc directory.
+	// Its target is the running image; no executable pathname is trusted.
+	fd, err := syscall.Openat(child, "exe", syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return "", errChildBirthUnavailable
+	}
+	f := os.NewFile(uintptr(fd), "owned-executable")
+	defer f.Close()
+	before, err := f.Stat()
+	if err != nil || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > 128<<20 {
+		return "", errChildBirthUnavailable
+	}
+	hash := sha256.New()
+	buffer := make([]byte, 32<<10)
+	remaining := before.Size()
+	for remaining > 0 {
+		if ctx.Err() != nil {
+			return "", errChildBirthUnavailable
+		}
+		n, err := io.ReadFull(f, buffer[:min(int64(len(buffer)), remaining)])
+		if err != nil {
+			return "", errChildBirthUnavailable
+		}
+		_, _ = hash.Write(buffer[:n])
+		remaining -= int64(n)
+	}
+	after, err := f.Stat()
+	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		return "", errChildBirthUnavailable
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func readHeldLinuxProcess(ctx context.Context, pid, pidfd, proc, child int) (OwnedProcessEvidence, error) {
+	fail := func() (OwnedProcessEvidence, error) { return OwnedProcessEvidence{}, errChildBirthUnavailable }
+	if ctx.Err() != nil {
+		return fail()
+	}
+	before, err := getPIDFDInfo(pidfd)
+	if err != nil || !sameChildCredentials(before, pid, uint32(os.Geteuid())) {
+		return fail()
+	}
+	if flags, err := pollPIDFD(pidfd); err != nil || flags != 0 {
+		return fail()
+	}
+	stat, err := readProcAt(child, "stat", 16384)
+	if err != nil {
+		return fail()
+	}
+	ticks, ok := linuxStartTicks(stat, pid)
+	if !ok {
+		return fail()
+	}
+	status, err := readProcAt(child, "status", 16384)
+	if err != nil {
+		return fail()
+	}
+	real, effective, ok := linuxUIDs(status)
+	if !ok || real != before.RUID || effective != before.EUID {
+		return fail()
+	}
+	boot, err := readProcAt(proc, "sys/kernel/random/boot_id", 64)
+	if err != nil || len(boot) != 37 || boot[36] != '\n' || !canonicalBootID(boot[:36]) {
+		return fail()
+	}
+	image, err := heldLinuxExecutable(ctx, child)
+	if err != nil {
+		return fail()
+	}
+	// Re-read around image access: neither an exec nor a credential/lifetime
+	// change can be accepted merely because the numeric PID stayed the same.
+	after, err := getPIDFDInfo(pidfd)
+	if err != nil || after != before || ctx.Err() != nil {
+		return fail()
+	}
+	stat, err = readProcAt(child, "stat", 16384)
+	if fresh, ok := linuxStartTicks(stat, pid); err != nil || !ok || fresh != ticks {
+		return fail()
+	}
+	checkImage, err := heldLinuxExecutable(ctx, child)
+	if err != nil || checkImage != image {
+		return fail()
+	}
+	if flags, err := pollPIDFD(pidfd); err != nil || flags != 0 || ctx.Err() != nil {
+		return fail()
+	}
+	return OwnedProcessEvidence{PID: pid, RealUID: real, EffectiveUID: effective, BootID: boot[:36],
+		Platform: "linux", StartTicks: ticks, Executable: image}, nil
 }

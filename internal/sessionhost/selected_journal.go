@@ -17,12 +17,15 @@ var selectedOperationID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]
 var errSelectedJournal = errors.New("operation_journal_unavailable")
 
 type selectedOperationEntry struct {
-	Cancelled bool            `json:"cancelled,omitempty"`
-	Digest    string          `json:"digest"`
-	Kind      string          `json:"kind"`
-	Submitted string          `json:"submitted_at"`
-	Result    json.RawMessage `json:"result,omitempty"`
-	Refusal   json.RawMessage `json:"refusal,omitempty"`
+	Cancelled bool `json:"cancelled,omitempty"`
+	// NoStart is private durable evidence, not a wire outcome extension.
+	NoStart   bool                    `json:"no_start_proved,omitempty"`
+	Started   *selectedStartedProcess `json:"held_process,omitempty"`
+	Digest    string                  `json:"digest"`
+	Kind      string                  `json:"kind"`
+	Submitted string                  `json:"submitted_at"`
+	Result    json.RawMessage         `json:"result,omitempty"`
+	Refusal   json.RawMessage         `json:"refusal,omitempty"`
 }
 
 // Entries and tombstones are retained indefinitely (at least seven days).
@@ -182,6 +185,12 @@ func (j *selectedOperationJournal) readLocked(id string) (selectedOperationEntry
 	if (len(entry.Refusal) != 0 && schema.Validate("refusal.schema.json", entry.Refusal) != nil) || (len(entry.Result) != 0 && len(entry.Refusal) != 0) {
 		return selectedOperationEntry{}, false, errSelectedJournal
 	}
+	if entry.NoStart && (!entry.Cancelled && len(entry.Refusal) == 0 || len(entry.Result) != 0) {
+		return selectedOperationEntry{}, false, errSelectedJournal
+	}
+	if entry.Started != nil && (!validSelectedStarted(entry) || entry.NoStart || entry.Cancelled || len(entry.Refusal) != 0) {
+		return selectedOperationEntry{}, false, errSelectedJournal
+	}
 	return entry, true, nil
 }
 
@@ -195,9 +204,23 @@ func (j *selectedOperationJournal) write(id string, entry selectedOperationEntry
 	if err != nil || len(data) > schema.Limit+1024 {
 		return errSelectedJournal
 	}
-	_, exists, err := j.readLocked(id)
+	old, exists, err := j.readLocked(id)
 	if err != nil {
 		return err
+	}
+	// An existing reservation may already have spawned. Never turn it into
+	// absence evidence, including after restart or a lost execute reply.
+	if entry.NoStart && ((!entry.Cancelled && len(entry.Refusal) == 0) || len(entry.Result) != 0 || exists && !old.NoStart) {
+		return errSelectedJournal
+	}
+	if entry.Started != nil && (!validSelectedStarted(entry) || entry.NoStart || entry.Cancelled || len(entry.Refusal) != 0) {
+		return errSelectedJournal
+	}
+	if exists && old.NoStart {
+		previous, _ := json.Marshal(old)
+		if !bytes.Equal(previous, data) {
+			return errSelectedJournal
+		}
 	}
 	if !exists {
 		if len(j.known) >= 1024 {

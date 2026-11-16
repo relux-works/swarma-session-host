@@ -14,7 +14,7 @@ static int read_identity(int pid, struct proc_bsdinfo *info, unsigned char *hash
  if (csops(pid, hashop, hash, 20) != 0) return -1; // CS_OPS_CDHASH
  if (sysctlbyname("kern.bootsessionuuid", boot, bootlen, NULL, 0) != 0) return -1;
  if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, info, sizeof(*info)) != sizeof(*info)) return -1;
- if (before.pbi_pid != info->pbi_pid || before.pbi_uid != info->pbi_uid || before.pbi_start_tvsec != info->pbi_start_tvsec || before.pbi_start_tvusec != info->pbi_start_tvusec) return -1;
+ if (before.pbi_pid != info->pbi_pid || before.pbi_uid != info->pbi_uid || before.pbi_ruid != info->pbi_ruid || before.pbi_start_tvsec != info->pbi_start_tvsec || before.pbi_start_tvusec != info->pbi_start_tvusec) return -1;
  // SZOMB is a readable exited process, not live evidence.
  if (info->pbi_status == 5) return -1;
  unsigned char after[20];
@@ -40,23 +40,32 @@ func ObserveProcess(ctx context.Context, pid int) (Process, error) {
 // The private operation argument permits a control of an actual failing csops
 // syscall; public observation always uses CS_OPS_CDHASH.
 func observeProcess(ctx context.Context, pid int, hashop uint32) (Process, error) {
+	p, err := observeKernelProcess(ctx, pid, hashop)
+	return p.Process, err
+}
+
+func ObserveKernelProcess(ctx context.Context, pid int) (KernelProcess, error) {
+	return observeKernelProcess(ctx, pid, 5) // CS_OPS_CDHASH
+}
+
+func observeKernelProcess(ctx context.Context, pid int, hashop uint32) (KernelProcess, error) {
 	if pid <= 0 || int(C.int(pid)) != pid || ctx.Err() != nil {
-		return Process{}, errors.New("process_unavailable")
+		return KernelProcess{}, errors.New("process_unavailable")
 	}
 	var info C.struct_proc_bsdinfo
 	var hash [20]byte
 	var boot [64]byte
 	n := C.size_t(len(boot))
 	if C.read_identity(C.int(pid), &info, (*C.uchar)(unsafe.Pointer(&hash[0])), (*C.char)(unsafe.Pointer(&boot[0])), &n, C.uint(hashop)) != 0 || ctx.Err() != nil || info.pbi_start_tvusec >= 1000000 || info.pbi_pid != C.uint32_t(pid) {
-		return Process{}, errors.New("process_unavailable")
+		return KernelProcess{}, errors.New("process_unavailable")
 	}
 	// Require the published canonical UUID including its terminator.
 	if n != 37 || boot[36] != 0 {
-		return Process{}, errors.New("process_unavailable")
+		return KernelProcess{}, errors.New("process_unavailable")
 	}
 	p := Process{PID: pid, UID: uint32(info.pbi_uid), BootUUID: string(boot[:36]), StartedAt: time.Unix(int64(info.pbi_start_tvsec), int64(info.pbi_start_tvusec)*1000).UTC().Format(ProcessTime), CDHash: hex.EncodeToString(hash[:])}
-	if !validProcess(p) {
-		return Process{}, errors.New("process_unavailable")
+	if !validProcess(p) || info.pbi_ruid == ^C.uint32_t(0) || info.pbi_start_tvsec == 0 {
+		return KernelProcess{}, errors.New("process_unavailable")
 	}
-	return p, nil
+	return KernelProcess{Process: p, RealUID: uint32(info.pbi_ruid), StartSec: uint64(info.pbi_start_tvsec), StartUsec: uint32(info.pbi_start_tvusec)}, nil
 }

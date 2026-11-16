@@ -38,12 +38,15 @@ type ordinaryExecutionOwner interface {
 // ordinary session generation, not the independently captured Host epoch.
 // Resume of a live execution must return this same object and manager.
 type selectedExecution struct {
-	notificationMu sync.Mutex
-	manager        *NotificationManager
-	session        string
-	generation     uint64
-	attachment     *ManagerAttachment
-	claim          *selectedOperationAdmission
+	processMu       sync.Mutex
+	processCaptured bool
+	processProof    *selectedProcessProof
+	notificationMu  sync.Mutex
+	manager         *NotificationManager
+	session         string
+	generation      uint64
+	attachment      *ManagerAttachment
+	claim           *selectedOperationAdmission
 }
 
 // registeredHostPlugin is the selected plugin's in-process daemon endpoint.
@@ -251,7 +254,7 @@ func (d *selectedManagerDaemon) handle(ctx context.Context, kind string, data []
 	// A persisted reservation is an unknown-outcome obligation even if execute
 	// fails, loses its reply or the daemon crashes. It is never automatically retried.
 	execution, result, err := d.owner.execute(ctx, kind, data)
-	if execution != nil && execution.manager != nil {
+	if execution != nil {
 		d.mu.Lock()
 		d.executions[execution] = struct{}{}
 		if d.closed {
@@ -277,6 +280,7 @@ func (d *selectedManagerDaemon) handle(ctx context.Context, kind string, data []
 	delete(ordinary, "notification")
 	result, _ = json.Marshal(ordinary)
 	entry.Result = append([]byte(nil), result...)
+	entry.Started = d.captureHeldProcess(ctx, execution, q.Operation, kind)
 	if d.journal.write(q.Operation, entry) != nil {
 		return selectedRefusal("session_liveness_unknown", map[string]string{"operation": q.Operation})
 	}

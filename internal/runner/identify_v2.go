@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -17,6 +19,68 @@ type linuxOriginal struct {
 	identity LinuxPIDFSIdentity
 	err      error
 	release  func()
+	started  OwnedProcessEvidence
+	process  func(context.Context) (OwnedProcessEvidence, error)
+}
+
+// OwnedProcessEvidence is private to the module's retained-owner seam. It is
+// raw kernel evidence, not a session-manager wire type or harness admission.
+// Linux clock-frequency/schema projection belongs to the negotiated consumer.
+// Darwin seconds/microseconds are never recovered from a formatted date.
+type OwnedProcessEvidence struct {
+	Execution             string
+	PID                   int
+	RealUID, EffectiveUID uint32
+	BootID, Platform      string
+	StartTicks, StartSec  string
+	StartUsec             uint32
+	Executable            string
+}
+
+// ProcessEvidence freshly checks the originally captured live child while
+// serializing with its sole reaper. It neither opens a process handle by PID
+// nor uses identify's cached ownership snapshot as liveness authority.
+func (s *Server) ProcessEvidence(ctx context.Context) (OwnedProcessEvidence, error) {
+	if s == nil || ctx == nil || ctx.Err() != nil {
+		return OwnedProcessEvidence{}, errChildBirthUnavailable
+	}
+	if _, ok := ctx.Deadline(); !ok || !lockProcessObservation(ctx, &s.processMu) {
+		return OwnedProcessEvidence{}, errChildBirthUnavailable
+	}
+	defer s.processMu.Unlock()
+	if !lockProcessObservation(ctx, &s.mu) {
+		return OwnedProcessEvidence{}, errChildBirthUnavailable
+	}
+	defer s.mu.Unlock()
+	if s.isClosedLocked() || !s.ownsChildLocked() || s.exited || s.waitUnknown ||
+		s.linux.process == nil || s.linux.started.PID != s.original.pid {
+		return OwnedProcessEvidence{}, errChildBirthUnavailable
+	}
+	fresh, err := s.linux.process(ctx)
+	if err != nil || ctx.Err() != nil || fresh != s.linux.started {
+		return OwnedProcessEvidence{}, errChildBirthUnavailable
+	}
+	fresh.Execution = s.cfg.Execution
+	return fresh, nil
+}
+
+// Acquiring existing ownership is deadline-bounded; it never retries capture,
+// starts a child, or adopts a handle. This keeps normal reaper polling from
+// making the first live observation depend on scheduler coincidence.
+func lockProcessObservation(ctx context.Context, mu *sync.Mutex) bool {
+	for ctx.Err() == nil {
+		if mu.TryLock() {
+			return true
+		}
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		}
+	}
+	return false
 }
 
 func identifyV2Refusal(req IdentifyV2Request, result, reason string) IdentifyV2Response {

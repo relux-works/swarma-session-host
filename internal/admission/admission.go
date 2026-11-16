@@ -27,6 +27,15 @@ type Process struct {
 	CDHash    string `json:"cdhash"`
 }
 
+// KernelProcess keeps the raw Darwin birth and real uid alongside the
+// unchanged private effective-uid/CDHash admission proof. It is not wire data.
+type KernelProcess struct {
+	Process   Process
+	RealUID   uint32
+	StartSec  uint64
+	StartUsec uint32
+}
+
 // Binding is a non-secret immutable projection, not an executable launch plan.
 // The runner/harness roles are explicit; this synthetic route has no wrapper.
 type Binding struct {

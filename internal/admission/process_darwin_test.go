@@ -182,3 +182,32 @@ func TestCSOpsFailureUnavailable(t *testing.T) {
 		t.Fatalf("valid image control failed: %v", err)
 	}
 }
+
+// Darwin-only native qualification: raw pbi birth/RUID accompany the unchanged
+// effective-UID/CDHash proof. Linux does not execute this test.
+func TestKernelProcessRawBirthAndCredentials(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	raw, err := ObserveKernelProcess(ctx, os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := ObserveProcess(ctx, os.Getpid())
+	if err != nil || raw.Process != legacy || raw.RealUID != uint32(os.Getuid()) ||
+		raw.Process.UID != uint32(os.Geteuid()) || raw.StartSec == 0 || raw.StartUsec >= 1000000 ||
+		time.Unix(int64(raw.StartSec), int64(raw.StartUsec)*1000).UTC().Format(ProcessTime) != legacy.StartedAt {
+		t.Fatal("raw Darwin fields changed private admission", err)
+	}
+	for _, pid := range []int{0, -1} {
+		if _, err := ObserveKernelProcess(ctx, pid); err == nil || err.Error() != "process_unavailable" {
+			t.Fatal("invalid PID produced raw evidence", err)
+		}
+	}
+	if _, err := observeKernelProcess(ctx, os.Getpid(), ^uint32(0)); err == nil || err.Error() != "process_unavailable" {
+		t.Fatal("failed executable observation produced raw evidence", err)
+	}
+	again, err := ObserveKernelProcess(ctx, os.Getpid())
+	if err != nil || again != raw {
+		t.Fatal("valid raw control lost", err)
+	}
+}

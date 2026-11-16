@@ -52,7 +52,9 @@ func (d *selectedManagerDaemon) observe(ctx context.Context, kind string, data [
 		return selectedRefusal("session_host_unavailable", nil)
 	}
 	if kind == "cancel" && !exists {
-		entry = selectedOperationEntry{Cancelled: true}
+		// Under d.mu this tombstone wins over admission's final reservation.
+		// admit is effect-free; execute cannot run after this durable decision.
+		entry = selectedOperationEntry{Cancelled: true, NoStart: true}
 		if d.journal.write(q.Operation, entry) != nil {
 			d.mu.Unlock()
 			return selectedRefusal("session_host_unavailable", nil)
@@ -152,7 +154,13 @@ func (d *selectedManagerDaemon) recordRefusal(id string, entry selectedOperation
 	if err == nil && exists && old.Cancelled {
 		return selectedRefusal("session_host_unavailable", map[string]string{"reason": "cancelled"})
 	}
+	if err == nil && exists {
+		// A pre-existing obligation is never overwritten by a later admission
+		// answer. Only the first pre-execute decision can prove no start.
+		return selectedRefusal("session_liveness_unknown", map[string]string{"operation": id})
+	}
 	entry.Refusal = append([]byte(nil), result...)
+	entry.NoStart = true
 	if err != nil || d.journal.write(id, entry) != nil {
 		return selectedRefusal("session_host_unavailable", nil)
 	}
