@@ -497,6 +497,7 @@ func TestLinuxV2EffectiveUIDExpectation(t *testing.T) {
 // A still-owned zombie may pass identify v2, but cannot supply live evidence.
 func TestHeldProcessKernelLifecycle(t *testing.T) {
 	s, open := startV2KernelRunner(t)
+	defer open()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	first, err := s.ProcessEvidence(ctx)
