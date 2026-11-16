@@ -1261,3 +1261,124 @@ func TestOperationJournalRestartKeepsAmbiguousDecisionUnknown(t *testing.T) {
 		t.Fatal("historical terminal replay re-entered admission")
 	}
 }
+
+// Claim: concurrent observers of one valid retained proof all receive it; a
+// second reader is never refused for contention alone, and sequential reads
+// before and after still succeed.
+func TestHeldProcessConcurrentObserversAllReceiveProof(t *testing.T) {
+	p, o, q := selectedHeldFixture(t)
+	selectedCall(t, p, "launch", q)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if got := p.daemon.observeHeldProcess(ctx, o.execution.session, o.execution.generation); got == nil || *got != o.admission.Kernel {
+		t.Fatal("valid control observation omitted before concurrency")
+	}
+	const observers, each = 8, 25
+	var wg sync.WaitGroup
+	missing := make(chan int, observers)
+	for i := 0; i < observers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			nilCount := 0
+			for j := 0; j < each; j++ {
+				got := p.daemon.observeHeldProcess(ctx, o.execution.session, o.execution.generation)
+				if got == nil || *got != o.admission.Kernel {
+					nilCount++
+				}
+			}
+			missing <- nilCount
+		}()
+	}
+	wg.Wait()
+	close(missing)
+	total := 0
+	for n := range missing {
+		total += n
+	}
+	if total != 0 {
+		t.Fatalf("concurrent observations omitted a valid proof %d of %d times", total, observers*each)
+	}
+	if got := p.daemon.observeHeldProcess(ctx, o.execution.session, o.execution.generation); got == nil || *got != o.admission.Kernel {
+		t.Fatal("valid control observation omitted after concurrency")
+	}
+}
+
+// Claim: optional process evidence that cannot be stored with the mandatory
+// result is dropped and the result still persists; the matching valid result
+// keeps its evidence as the positive control.
+func TestOptionalEvidenceDoesNotVetoDurableResult(t *testing.T) {
+	t.Run("mismatched-result-persists-without-process", func(t *testing.T) {
+		p, o, q := selectedHeldFixture(t)
+		o.executeHook = func(_ context.Context, _ string, request []byte) (*selectedExecution, []byte, error) {
+			startSelectedHeldFixture(t, o, q)
+			var operation struct {
+				ID string `json:"operation_id"`
+			}
+			if err := json.Unmarshal(request, &operation); err != nil {
+				t.Fatal(err)
+			}
+			var record map[string]any
+			if err := json.Unmarshal(selectedSessionBytes(o.execution, operation.ID), &record); err != nil {
+				t.Fatal(err)
+			}
+			record["manager"] = "other-manager"
+			data, err := json.Marshal(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return o.execution, data, nil
+		}
+		result, exit := p.Call(processContext(t), selectedManagerProtocol, "launch", memberOperationBytes(t, q))
+		if exit != 0 {
+			t.Fatalf("mandatory result vetoed by optional evidence: %s exit=%d", result, exit)
+		}
+		id := q["operation_id"].(string)
+		entry, exists, err := p.daemon.journal.read(id)
+		if err != nil || !exists || len(entry.Result) == 0 || entry.Started != nil {
+			t.Fatal("result not persisted, or unpersistable evidence retained", err)
+		}
+		if p.daemon.observeHeldProcess(processContext(t), o.execution.session, o.execution.generation) != nil {
+			t.Fatal("dropped evidence still exposed a process")
+		}
+	})
+	t.Run("valid-result-keeps-process", func(t *testing.T) {
+		p, o, q := selectedHeldFixture(t)
+		selectedCall(t, p, "launch", q)
+		id := q["operation_id"].(string)
+		entry, exists, err := p.daemon.journal.read(id)
+		if err != nil || !exists || entry.Started == nil {
+			t.Fatal("valid control lost its started evidence", err)
+		}
+		if p.daemon.observeHeldProcess(processContext(t), o.execution.session, o.execution.generation) == nil {
+			t.Fatal("valid control observation omitted")
+		}
+	})
+}
+
+// Claim: while the capability is not advertised outside fixtures, no ordinary
+// describe, launch or outcome reply carries its extension members, even when
+// a private retained proof exists; that private proof is the valid control.
+func TestProcessObservationNotAdvertisedOutsideFixtures(t *testing.T) {
+	p, o, q := selectedHeldFixture(t)
+	launch := selectedCall(t, p, "launch", q)
+	if p.daemon.observeHeldProcess(processContext(t), o.execution.session, o.execution.generation) == nil {
+		t.Fatal("valid control: private retained proof missing")
+	}
+	description, exit := p.Call(processContext(t), selectedManagerProtocol, "describe", []byte("{}"))
+	if exit != 0 || !bytes.Contains(description, []byte(`"status/1"`)) {
+		t.Fatalf("valid control: base describe unavailable: %s exit=%d", description, exit)
+	}
+	id := q["operation_id"].(string)
+	outcome, exit := p.Call(processContext(t), selectedManagerProtocol, "status", operationRequest(t, id))
+	if exit != 0 || !bytes.Contains(outcome, []byte(`"outcome":"started"`)) {
+		t.Fatalf("valid control: base outcome unavailable: %s exit=%d", outcome, exit)
+	}
+	for name, reply := range map[string][]byte{"describe": description, "launch": launch, "outcome": outcome} {
+		for _, member := range []string{`"process"`, `"termination"`, `"no_start"`, "process-observation/1"} {
+			if bytes.Contains(reply, []byte(member)) {
+				t.Fatalf("%s reply leaked %s without the advertised capability: %s", name, member, reply)
+			}
+		}
+	}
+}

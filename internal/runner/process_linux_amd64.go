@@ -641,8 +641,9 @@ func captureLinuxOriginal(pid, pidfd int) (result linuxOriginal) {
 	if _, err := fdInode(child, procfsMagic); err != nil {
 		return result
 	}
+	var capturedImage heldLinuxImage
 	read := func(ctx context.Context) (OwnedProcessEvidence, error) {
-		return readHeldLinuxProcess(ctx, pid, pidfd, proc, child)
+		return readHeldLinuxProcess(ctx, pid, pidfd, proc, child, &capturedImage)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -701,41 +702,91 @@ func linuxUIDs(text string) (real, effective uint32, ok bool) {
 	return real, effective, seen
 }
 
-func heldLinuxExecutable(ctx context.Context, child int) (string, error) {
+// heldLinuxImage is the capture-time identity of the running image. The
+// digest is computed once, at capture; later reads compare the opened exe's
+// fstat identity instead of re-hashing the whole image on every observation.
+type heldLinuxImage struct {
+	digest string
+	dev    uint64
+	ino    uint64
+	size   int64
+	mtime  syscall.Timespec
+	ctime  syscall.Timespec
+}
+
+func heldLinuxImageIdentity(info os.FileInfo) (heldLinuxImage, bool) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return heldLinuxImage{}, false
+	}
+	return heldLinuxImage{dev: st.Dev, ino: st.Ino, size: st.Size, mtime: st.Mtim, ctime: st.Ctim}, true
+}
+
+func (a heldLinuxImage) sameFile(b heldLinuxImage) bool {
+	return a.dev == b.dev && a.ino == b.ino && a.size == b.size && a.mtime == b.mtime && a.ctime == b.ctime
+}
+
+func heldLinuxExecutable(ctx context.Context, child int) (heldLinuxImage, error) {
 	// exe is the kernel magic link beneath the pinned child's proc directory.
 	// Its target is the running image; no executable pathname is trusted.
 	fd, err := syscall.Openat(child, "exe", syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return "", errChildBirthUnavailable
+		return heldLinuxImage{}, errChildBirthUnavailable
 	}
 	f := os.NewFile(uintptr(fd), "owned-executable")
 	defer f.Close()
 	before, err := f.Stat()
 	if err != nil || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > 128<<20 {
-		return "", errChildBirthUnavailable
+		return heldLinuxImage{}, errChildBirthUnavailable
+	}
+	identity, ok := heldLinuxImageIdentity(before)
+	if !ok {
+		return heldLinuxImage{}, errChildBirthUnavailable
 	}
 	hash := sha256.New()
 	buffer := make([]byte, 32<<10)
 	remaining := before.Size()
 	for remaining > 0 {
 		if ctx.Err() != nil {
-			return "", errChildBirthUnavailable
+			return heldLinuxImage{}, errChildBirthUnavailable
 		}
 		n, err := io.ReadFull(f, buffer[:min(int64(len(buffer)), remaining)])
 		if err != nil {
-			return "", errChildBirthUnavailable
+			return heldLinuxImage{}, errChildBirthUnavailable
 		}
 		_, _ = hash.Write(buffer[:n])
 		remaining -= int64(n)
 	}
 	after, err := f.Stat()
 	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
-		return "", errChildBirthUnavailable
+		return heldLinuxImage{}, errChildBirthUnavailable
 	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	identity.digest = hex.EncodeToString(hash.Sum(nil))
+	return identity, nil
 }
 
-func readHeldLinuxProcess(ctx context.Context, pid, pidfd, proc, child int) (OwnedProcessEvidence, error) {
+// heldLinuxExecutableMatches reports the capture-time digest only when the
+// currently opened exe is the same file (dev, ino, size, mtime, ctime) as at
+// capture. It never re-hashes; an exec to a different file fails here.
+func heldLinuxExecutableMatches(child int, want heldLinuxImage) error {
+	fd, err := syscall.Openat(child, "exe", syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return errChildBirthUnavailable
+	}
+	f := os.NewFile(uintptr(fd), "owned-executable")
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return errChildBirthUnavailable
+	}
+	identity, ok := heldLinuxImageIdentity(info)
+	if !ok || !want.sameFile(identity) {
+		return errChildBirthUnavailable
+	}
+	return nil
+}
+
+func readHeldLinuxProcess(ctx context.Context, pid, pidfd, proc, child int, captured *heldLinuxImage) (OwnedProcessEvidence, error) {
 	fail := func() (OwnedProcessEvidence, error) { return OwnedProcessEvidence{}, errChildBirthUnavailable }
 	if ctx.Err() != nil {
 		return fail()
@@ -767,7 +818,24 @@ func readHeldLinuxProcess(ctx context.Context, pid, pidfd, proc, child int) (Own
 	if err != nil || len(boot) != 37 || boot[36] != '\n' || !canonicalBootID(boot[:36]) {
 		return fail()
 	}
-	image, err := heldLinuxExecutable(ctx, child)
+	// Hash once at capture; every later read compares fstat identity only.
+	imageDigest := func() (string, error) {
+		if captured != nil && captured.digest != "" {
+			if err := heldLinuxExecutableMatches(child, *captured); err != nil {
+				return "", err
+			}
+			return captured.digest, nil
+		}
+		img, err := heldLinuxExecutable(ctx, child)
+		if err != nil {
+			return "", err
+		}
+		if captured != nil {
+			*captured = img
+		}
+		return img.digest, nil
+	}
+	image, err := imageDigest()
 	if err != nil {
 		return fail()
 	}
@@ -781,7 +849,7 @@ func readHeldLinuxProcess(ctx context.Context, pid, pidfd, proc, child int) (Own
 	if fresh, ok := linuxStartTicks(stat, pid); err != nil || !ok || fresh != ticks {
 		return fail()
 	}
-	checkImage, err := heldLinuxExecutable(ctx, child)
+	checkImage, err := imageDigest()
 	if err != nil || checkImage != image {
 		return fail()
 	}

@@ -38,7 +38,7 @@ type ordinaryExecutionOwner interface {
 // ordinary session generation, not the independently captured Host epoch.
 // Resume of a live execution must return this same object and manager.
 type selectedExecution struct {
-	processMu       sync.Mutex
+	processMu       sync.RWMutex
 	processCaptured bool
 	processProof    *selectedProcessProof
 	notificationMu  sync.Mutex
@@ -275,12 +275,24 @@ func (d *selectedManagerDaemon) handle(ctx context.Context, kind string, data []
 		return selectedRefusal("session_liveness_unknown", map[string]string{"operation": q.Operation})
 	}
 	// Ordinary results do not supply notification authority or references.
+	// While process-observation/1 is not advertised outside fixtures, an
+	// ordinary result likewise cannot emit its extension members.
 	var ordinary map[string]json.RawMessage
 	_ = json.Unmarshal(result, &ordinary)
 	delete(ordinary, "notification")
+	delete(ordinary, "process")
+	delete(ordinary, "termination")
+	delete(ordinary, "no_start")
 	result, _ = json.Marshal(ordinary)
 	entry.Result = append([]byte(nil), result...)
 	entry.Started = d.captureHeldProcess(ctx, execution, q.Operation, kind)
+	// Optional process evidence must never veto the mandatory durable launch
+	// result: evidence that cannot be stored with this result is dropped
+	// (process stays absent/unknown) and the result is persisted as before.
+	if entry.Started != nil && !validSelectedStarted(entry) {
+		entry.Started = nil
+		execution.discardHeldProcessProof()
+	}
 	if d.journal.write(q.Operation, entry) != nil {
 		return selectedRefusal("session_liveness_unknown", map[string]string{"operation": q.Operation})
 	}
@@ -336,6 +348,10 @@ func (d *selectedManagerDaemon) handle(ctx context.Context, kind string, data []
 		}
 	}
 	entry.Result = result
+	if entry.Started != nil && !validSelectedStarted(entry) {
+		entry.Started = nil
+		execution.discardHeldProcessProof()
+	}
 	if d.journal.write(q.Operation, entry) != nil {
 		return selectedRefusal("session_liveness_unknown", map[string]string{"operation": q.Operation})
 	}

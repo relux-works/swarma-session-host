@@ -88,6 +88,9 @@ func (d *selectedManagerDaemon) observe(ctx context.Context, kind string, data [
 		if json.Unmarshal(current, &record) == nil {
 			delete(record, "protocol")
 			delete(record, "ok")
+			delete(record, "process")
+			delete(record, "termination")
+			delete(record, "no_start")
 			response["outcome"] = "started"
 			response["session"] = record
 		}
@@ -121,9 +124,14 @@ func (d *selectedManagerDaemon) observeSession(ctx context.Context, session stri
 	}
 	// Ordinary records cannot grant notification authority. As for ordinary
 	// launch results, absence of live attachment evidence stays unresolved.
+	// While process-observation/1 is not advertised outside fixtures, its
+	// extension members are likewise never emitted on an ordinary reply.
 	var record map[string]json.RawMessage
 	_ = json.Unmarshal(result, &record)
 	delete(record, "notification")
+	delete(record, "process")
+	delete(record, "termination")
+	delete(record, "no_start")
 	result, _ = json.Marshal(record)
 	return result, 0
 }

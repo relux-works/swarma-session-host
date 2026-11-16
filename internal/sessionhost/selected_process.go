@@ -180,6 +180,14 @@ func (d *selectedManagerDaemon) captureHeldProcess(ctx context.Context, e *selec
 	return &copy
 }
 
+// discardHeldProcessProof drops optional evidence that cannot be persisted
+// with its mandatory result. The result itself is unaffected.
+func (e *selectedExecution) discardHeldProcessProof() {
+	e.processMu.Lock()
+	defer e.processMu.Unlock()
+	e.processProof = nil
+}
+
 // observeHeldProcess returns a value copy only for a live retained execution
 // whose authoritative started snapshot was durably stored. Disk alone cannot
 // recreate a proof after daemon replacement. It has no repair or input path.
@@ -203,10 +211,14 @@ func (d *selectedManagerDaemon) observeHeldProcess(ctx context.Context, session 
 		}
 	}
 	d.mu.Unlock()
-	if execution == nil || !execution.processMu.TryLock() {
+	if execution == nil {
 		return nil
 	}
-	defer execution.processMu.Unlock()
+	// Observation is read-only and shared: concurrent observers of one valid
+	// proof must all receive it. Only capture (and proof discard) takes the
+	// write side, so a second reader is never refused for contention alone.
+	execution.processMu.RLock()
+	defer execution.processMu.RUnlock()
 	p := execution.processProof
 	if p == nil || p.daemon != d {
 		return nil

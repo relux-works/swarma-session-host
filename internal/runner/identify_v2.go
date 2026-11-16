@@ -51,16 +51,30 @@ func (s *Server) ProcessEvidence(ctx context.Context) (OwnedProcessEvidence, err
 	if !lockProcessObservation(ctx, &s.mu) {
 		return OwnedProcessEvidence{}, errChildBirthUnavailable
 	}
-	defer s.mu.Unlock()
 	if s.isClosedLocked() || !s.ownsChildLocked() || s.exited || s.waitUnknown ||
 		s.linux.process == nil || s.linux.started.PID != s.original.pid {
+		s.mu.Unlock()
 		return OwnedProcessEvidence{}, errChildBirthUnavailable
 	}
-	fresh, err := s.linux.process(ctx)
-	if err != nil || ctx.Err() != nil || fresh != s.linux.started {
+	process, started, execution := s.linux.process, s.linux.started, s.cfg.Execution
+	// processMu alone excludes reaping, so the kernel reread runs without
+	// s.mu: holding the runner's main mutex across /proc reads would stall
+	// output collection and every runner client for the whole read.
+	s.mu.Unlock()
+	fresh, err := process(ctx)
+	if err != nil || ctx.Err() != nil || fresh != started {
 		return OwnedProcessEvidence{}, errChildBirthUnavailable
 	}
-	fresh.Execution = s.cfg.Execution
+	// Re-check ownership after the unlocked read before returning evidence.
+	if !lockProcessObservation(ctx, &s.mu) {
+		return OwnedProcessEvidence{}, errChildBirthUnavailable
+	}
+	defer s.mu.Unlock()
+	if s.isClosedLocked() || !s.ownsChildLocked() || s.exited || s.waitUnknown ||
+		s.linux.process == nil || s.linux.started != started || ctx.Err() != nil {
+		return OwnedProcessEvidence{}, errChildBirthUnavailable
+	}
+	fresh.Execution = execution
 	return fresh, nil
 }
 

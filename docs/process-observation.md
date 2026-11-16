@@ -21,7 +21,10 @@ object. There is no public proof constructor or request-supplied proof.
 The runner captures raw process identity before its reaper begins. On Linux
 the original atomic CLONE_PIDFD handle and a pinned genuine proc directory
 remain under that reaper's custody. Fresh reads check the real and effective
-UIDs, boot UUID, stat field 22 and the opened running image's SHA-256.
+UIDs, boot UUID and stat field 22. The opened running image is hashed once,
+at capture; later reads compare its fstat identity (device, inode, size and
+timestamps) with the captured file instead of re-hashing, and the kernel
+reread runs without the runner's main mutex held.
 An identify-v2 snapshot may describe an owned zombie; live process evidence
 refuses it. No process handle is opened by a saved numeric PID.
 
@@ -39,6 +42,16 @@ private admission record. It returns a copy. Missing persistence, lost hold,
 changed image/role/handoff/effective UID/binding/revision, ambiguity or lookup
 failure omits evidence. A new daemon cannot reconstruct ownership from disk.
 This implementation conservatively requires the exact captured revision.
+Observations are shared reads: concurrent observers of one valid proof all
+receive it, and only capture serializes against them. Process evidence is
+optional beside the mandatory durable launch result: evidence that cannot be
+stored with its result is dropped, never a reason to lose the result.
+
+The `process-observation/1` capability is not advertised outside fixtures,
+and no ordinary describe, launch, status or outcome reply carries `process`,
+`termination` or `no_start`. Private proof computation does not change that;
+advertising the capability requires the accepted negotiated schema and
+consumer revision.
 
 ## Durable no-start decisions
 

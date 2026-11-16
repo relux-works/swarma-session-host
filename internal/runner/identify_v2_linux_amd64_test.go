@@ -663,6 +663,83 @@ func TestHeldLinuxKernelFieldParsing(t *testing.T) {
 	}
 }
 
+// Claim: the kernel reread runs under processMu alone, never under the
+// runner's main mutex, and the valid live evidence is still returned.
+func TestHeldProcessEvidenceReleasesMainMutexDuringRead(t *testing.T) {
+	s, open := startV2KernelRunner(t)
+	defer open()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := s.linux.started
+	mainFree, reaperHeld := false, false
+	s.linux.process = func(ctx context.Context) (OwnedProcessEvidence, error) {
+		if s.mu.TryLock() {
+			mainFree = true
+			s.mu.Unlock()
+		}
+		if !s.processMu.TryLock() {
+			reaperHeld = true
+		} else {
+			s.processMu.Unlock()
+		}
+		return started, nil
+	}
+	fresh, err := s.ProcessEvidence(ctx)
+	if err != nil || fresh.PID != started.PID || fresh.Execution != s.cfg.Execution {
+		t.Fatal("valid control evidence lost while releasing main mutex", fresh, err)
+	}
+	if !mainFree {
+		t.Fatal("kernel reread ran while holding the runner main mutex")
+	}
+	if !reaperHeld {
+		t.Fatal("kernel reread ran without the reaper-excluding mutex")
+	}
+}
+
+// Claim: capture-time image identity matches only the same file; a different
+// file, or the same path with altered size or timestamps, is not the captured
+// image. Repeated live evidence and the exec-change control above exercise
+// this identity check instead of a re-hash on every read.
+func TestHeldLinuxImageIdentityMatchesOnlySameFile(t *testing.T) {
+	cat, err := os.Stat("/bin/cat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := heldLinuxImageIdentity(cat)
+	if !ok || identity.ino == 0 {
+		t.Fatal("valid control: image identity unavailable")
+	}
+	if !identity.sameFile(identity) {
+		t.Fatal("valid control: identical image identity refused")
+	}
+	otherPath := "/bin/sh"
+	if resolved, err := os.Stat(otherPath); err != nil || os.SameFile(cat, resolved) {
+		otherPath = "/bin/true"
+	}
+	other, err := os.Stat(otherPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherIdentity, ok := heldLinuxImageIdentity(other); !ok || identity.sameFile(otherIdentity) {
+		t.Fatal("different running image accepted as captured image")
+	}
+	changed := identity
+	changed.size++
+	if identity.sameFile(changed) {
+		t.Fatal("size-changed image accepted as captured image")
+	}
+	changed = identity
+	changed.mtime.Nsec++
+	if identity.sameFile(changed) {
+		t.Fatal("mtime-changed image accepted as captured image")
+	}
+	changed = identity
+	changed.ctime.Sec++
+	if identity.sameFile(changed) {
+		t.Fatal("ctime-changed image accepted as captured image")
+	}
+}
+
 // Brief contention with the existing reaper waits inside the request budget.
 // The neighboring timeout control above proves that waiting stays bounded.
 func TestHeldProcessWaitsForExistingOwnership(t *testing.T) {
