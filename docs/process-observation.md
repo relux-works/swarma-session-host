@@ -54,6 +54,16 @@ The journal rejects converting a reservation to a no-start decision and
 rejects reopening an explicit terminal decision. Exact historical lookup
 never executes the operation again. Wire outcome negotiation is separate.
 
+Recovery validates the complete private snapshot before interpreting lifecycle
+evidence. Duplicate or case-variant storage keys, unknown private members,
+missing kernel fields, null storage members and contradictory terminal states
+are unavailable. A result must name the operation whose indexed snapshot is
+being read. The existing strict JSON utility checks original bytes; no
+normalization may discard malformed evidence. Legacy records without explicit
+proof remain valid unknown evidence. Invalid new snapshots fail before an
+index reservation or pending marker is written. Capacity exhaustion retains
+every existing obligation.
+
 Neither process evidence nor no-start acquires, binds, releases or breaks a
 lease, opens an input fence, starts/stops/signals a process, reconciles a
 journal or changes a generation. There is no descendant-termination proof.
@@ -68,6 +78,8 @@ With the repository's documented private Go environment and Go 1.25.5:
 ```sh
 go test -p 1 -race -count=1 -timeout=5m \
   -run 'TestNoStart|TestHeldProcess|TestHeldLinux' ./internal/sessionhost ./internal/runner
+go test -p 1 -race -count=1 -timeout=5m \
+  -run 'TestOperationJournal|TestHeldProof' ./internal/sessionhost
 python3 -m unittest discover -s tools/ci -p 'test_module_checks.py' -v
 python3 tools/ci/module_checks.py
 gofmt -l internal cmd manager tools

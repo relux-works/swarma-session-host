@@ -7,12 +7,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -699,5 +701,563 @@ func TestNoStartLegacyAndContradictoryRecords(t *testing.T) {
 	}
 	if _, _, err := p.daemon.journal.read(id); !errors.Is(err, errSelectedJournal) {
 		t.Fatal("contradictory record accepted", err)
+	}
+}
+
+func recoveryJournal(t *testing.T) *selectedOperationJournal {
+	t.Helper()
+	j, err := openSelectedOperationJournal(filepath.Join(t.TempDir(), "operations"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := j.close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return j
+}
+
+// A malformed or ambiguous durable decision is unavailable, with no repair
+// or lost obligation. A correctly encoded terminal decision is the positive.
+func TestOperationJournalRecoveryRejectsAmbiguousDecisions(t *testing.T) {
+	mutations := map[string]func([]byte) []byte{
+		"duplicate-proof": func(b []byte) []byte {
+			return bytes.Replace(b, []byte(`"no_start_proved":true`), []byte(`"no_start_proved":false,"no_start_proved":true`), 1)
+		},
+		"proof-key-case": func(b []byte) []byte {
+			return bytes.Replace(b, []byte(`"no_start_proved"`), []byte(`"NO_START_PROVED"`), 1)
+		},
+		"unknown-member": func(b []byte) []byte { return bytes.Replace(b, []byte("{"), []byte(`{"reconciled":true,`), 1) },
+		"signature-member": func(b []byte) []byte {
+			return bytes.Replace(b, []byte("{"), []byte(`{"sig":"ignored-by-canonical-output",`), 1)
+		},
+		"null-correlation": func(b []byte) []byte { return bytes.Replace(b, []byte(`"digest":""`), []byte(`"digest":null`), 1) },
+		"invalid-utf8": func(b []byte) []byte {
+			return bytes.Replace(b, []byte(`"submitted_at":""`), append([]byte(`"submitted_at":"`), 0xff, '"'), 1)
+		},
+		"lone-surrogate": func(b []byte) []byte {
+			return bytes.Replace(b, []byte(`"submitted_at":""`), []byte(`"submitted_at":"\ud800"`), 1)
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			j := recoveryJournal(t)
+			id := "11111111-1111-4111-8111-111111111111"
+			if err := j.write(id, selectedOperationEntry{Cancelled: true, NoStart: true}); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(j.store.dir, id+".json")
+			valid, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if entry, exists, err := j.read(id); err != nil || !exists || !entry.NoStart {
+				t.Fatal("valid decision unavailable", err)
+			}
+			invalid := mutate(valid)
+			if bytes.Equal(invalid, valid) {
+				t.Fatal("corruption control was not applied")
+			}
+			if err := os.WriteFile(path, invalid, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := j.read(id); !errors.Is(err, errSelectedJournal) {
+				t.Fatal("ambiguous lifecycle decision accepted", err)
+			}
+			if !j.known[id] {
+				t.Fatal("failed lookup discarded obligation")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(after, invalid) {
+				t.Fatal("lookup repaired evidence", err)
+			}
+			if err := os.WriteFile(path, valid, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if entry, exists, err := j.read(id); err != nil || !exists || !entry.NoStart {
+				t.Fatal("restored positive control refused", err)
+			}
+		})
+	}
+}
+
+// Invalid transitions must fail before even reserving an ID or writing a
+// pending marker. A valid reservation with the same ID must remain possible.
+func TestOperationJournalRejectsInvalidWritesWithoutEffects(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	otherID := "22222222-2222-4222-8222-222222222222"
+	valid := selectedOperationEntry{Digest: strings.Repeat("a", 64), Kind: "launch", Submitted: "2026-11-01T00:00:00Z"}
+	refusal, _ := selectedRefusal("policy_refused", nil)
+	result := selectedSessionBytes(&selectedExecution{session: "SES-fixture", generation: 1}, id)
+	mutations := map[string]func(*selectedOperationEntry){
+		"bad-refusal":        func(e *selectedOperationEntry) { e.Refusal = []byte(`{"ok":true}`) },
+		"cancel-and-result":  func(e *selectedOperationEntry) { e.Cancelled = true; e.Result = result },
+		"cancel-and-refusal": func(e *selectedOperationEntry) { e.Cancelled = true; e.Refusal = refusal },
+		"wrong-result-operation": func(e *selectedOperationEntry) {
+			e.Result = selectedSessionBytes(&selectedExecution{session: "SES-fixture", generation: 1}, otherID)
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			j := recoveryJournal(t)
+			entry := valid
+			mutate(&entry)
+			if err := j.write(id, entry); !errors.Is(err, errSelectedJournal) {
+				t.Fatal("invalid lifecycle snapshot persisted", err)
+			}
+			index, err := os.ReadFile(filepath.Join(j.store.dir, "operations.index"))
+			if err != nil || len(index) != 0 || j.known[id] {
+				t.Fatal("rejected write reserved operation", err)
+			}
+			for _, suffix := range []string{".json", ".pending"} {
+				if _, err := os.Lstat(filepath.Join(j.store.dir, id+suffix)); !os.IsNotExist(err) {
+					t.Fatal("rejected write left state", suffix, err)
+				}
+			}
+			if err := j.write(id, valid); err != nil {
+				t.Fatal("valid neighboring reservation refused", err)
+			}
+			if got, exists, err := j.read(id); err != nil || !exists || got.NoStart || len(got.Result) != 0 {
+				t.Fatal("valid reservation changed", err)
+			}
+		})
+	}
+}
+
+// Exhaustion refuses a new decision without evicting any prior obligation.
+// Existing decisions remain readable and idempotent across reopening.
+func TestOperationJournalCapacityRetainsObligations(t *testing.T) {
+	j := recoveryJournal(t)
+	entry := selectedOperationEntry{Cancelled: true, NoStart: true}
+	ids := make([]string, 1024)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("%08x-0000-4000-8000-000000000000", i+1)
+		if err := j.write(ids[i], entry); err != nil {
+			t.Fatalf("reservation %d: %v", i, err)
+		}
+	}
+	indexPath := filepath.Join(j.store.dir, "operations.index")
+	before, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := "ffffffff-0000-4000-8000-000000000000"
+	if err := j.write(extra, entry); !errors.Is(err, errSelectedJournal) {
+		t.Fatal("exhausted journal accepted new obligation", err)
+	}
+	after, err := os.ReadFile(indexPath)
+	if err != nil || !bytes.Equal(before, after) || j.known[extra] {
+		t.Fatal("exhaustion changed retained index", err)
+	}
+	for _, suffix := range []string{".json", ".pending"} {
+		if _, err := os.Lstat(filepath.Join(j.store.dir, extra+suffix)); !os.IsNotExist(err) {
+			t.Fatal("exhaustion left partial decision", err)
+		}
+	}
+	directory := j.store.dir
+	if err := j.close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openSelectedOperationJournal(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.close()
+	if len(reopened.known) != len(ids) {
+		t.Fatal("reopen lost obligations")
+	}
+	for _, id := range ids {
+		got, exists, err := reopened.read(id)
+		if err != nil || !exists || !got.NoStart || !got.Cancelled {
+			t.Fatal("retained decision unavailable", id, err)
+		}
+	}
+	if err := reopened.write(ids[0], entry); err != nil {
+		t.Fatal("capacity blocked identical existing decision", err)
+	}
+}
+
+type processJournalWitness struct {
+	directory os.FileInfo
+	files     map[string]struct {
+		info os.FileInfo
+		data []byte
+	}
+}
+
+func witnessProcessJournal(t *testing.T, directory string) processJournalWitness {
+	t.Helper()
+	info, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := processJournalWitness{directory: info, files: make(map[string]struct {
+		info os.FileInfo
+		data []byte
+	})}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			t.Fatal("unexpected journal fixture member", err)
+		}
+		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.files[entry.Name()] = struct {
+			info os.FileInfo
+			data []byte
+		}{info, data}
+	}
+	return w
+}
+
+func requireSameProcessJournal(t *testing.T, before, after processJournalWitness) {
+	t.Helper()
+	if !os.SameFile(before.directory, after.directory) || !before.directory.ModTime().Equal(after.directory.ModTime()) ||
+		len(before.files) != len(after.files) {
+		t.Fatal("observation changed journal directory")
+	}
+	for name, old := range before.files {
+		current, ok := after.files[name]
+		if !ok || !os.SameFile(old.info, current.info) || old.info.Mode() != current.info.Mode() ||
+			!old.info.ModTime().Equal(current.info.ModTime()) || !bytes.Equal(old.data, current.data) {
+			t.Fatal("observation changed journal member", name)
+		}
+	}
+}
+
+// Parallel observations may omit while another proof read owns the mutex.
+// Every returned value is the same owned incarnation; mutation stays local,
+// and no journal, input, generation, admission or launch effect is permitted.
+func TestHeldProofConcurrentReadsRemainReadOnly(t *testing.T) {
+	p, o, q := selectedHeldFixture(t)
+	selectedCall(t, p, "launch", q)
+	e := o.execution
+	expected := o.admission.Kernel
+	before := witnessProcessJournal(t, p.daemon.journal.store.dir)
+	host := e.manager.owner.host.Snapshot()
+	ctx := processContext(t)
+	if p.daemon.observeHeldProcess(ctx, e.session, e.generation) == nil {
+		t.Fatal("initial valid proof omitted")
+	}
+	var returned atomic.Int32
+	errors := make(chan string, 8)
+	var joined sync.WaitGroup
+	for range 8 {
+		joined.Add(1)
+		go func() {
+			defer joined.Done()
+			for range 16 {
+				got := p.daemon.observeHeldProcess(ctx, e.session, e.generation)
+				if got == nil {
+					continue
+				}
+				if *got != expected {
+					errors <- "concurrent proof changed"
+					return
+				}
+				returned.Add(1)
+				got.PID = 0
+			}
+		}()
+	}
+	joined.Wait()
+	close(errors)
+	for err := range errors {
+		t.Error(err)
+	}
+	if returned.Load() == 0 || p.daemon.observeHeldProcess(ctx, e.session, e.generation) == nil {
+		t.Fatal("positive concurrent proof control unavailable")
+	}
+	if p.daemon.provedNoStart(ctx, q["operation_id"].(string)) || o.starts.Load() != 1 || o.admissions.Load() != 1 ||
+		!reflect.DeepEqual(host, e.manager.owner.host.Snapshot()) {
+		t.Fatal("observation changed lifecycle or input")
+	}
+	requireSameProcessJournal(t, before, witnessProcessJournal(t, p.daemon.journal.store.dir))
+}
+
+type interleavedProcessOwner struct {
+	*selectedHeldOwner
+	hookMu    sync.Mutex
+	reads     int
+	afterRead func(context.Context, int)
+}
+
+func (o *interleavedProcessOwner) ownedHarness(ctx context.Context, e *selectedExecution) (*runner.Server, selectedProcessAdmission, error) {
+	held, admission, err := o.selectedHeldOwner.ownedHarness(ctx, e)
+	o.hookMu.Lock()
+	o.reads++
+	read, hook := o.reads, o.afterRead
+	o.hookMu.Unlock()
+	if hook != nil {
+		hook(ctx, read)
+	}
+	return held, admission, err
+}
+
+func (o *interleavedProcessOwner) setHook(hook func(context.Context, int)) {
+	o.hookMu.Lock()
+	defer o.hookMu.Unlock()
+	o.reads, o.afterRead = 0, hook
+}
+
+// A correct kernel read does not authorize a reply after private admission
+// changes during that read. Stable neighboring admission still returns proof.
+func TestHeldProofRechecksAdmissionAfterKernelRead(t *testing.T) {
+	p, base, q := selectedHeldFixture(t)
+	o := &interleavedProcessOwner{selectedHeldOwner: base}
+	p.daemon.owner = o
+	selectedCall(t, p, "launch", q)
+	expected := base.admission
+	for _, name := range []string{"registration", "handoff", "effective-uid"} {
+		t.Run(name, func(t *testing.T) {
+			defer o.setHook(nil)
+			defer func() { base.mu.Lock(); base.admission = expected; base.mu.Unlock() }()
+			if p.daemon.observeHeldProcess(processContext(t), base.execution.session, base.execution.generation) == nil {
+				t.Fatal("stable positive control omitted")
+			}
+			before := witnessProcessJournal(t, p.daemon.journal.store.dir)
+			o.setHook(func(_ context.Context, read int) {
+				if read != 1 {
+					return
+				}
+				base.mu.Lock()
+				defer base.mu.Unlock()
+				switch name {
+				case "registration":
+					base.admission.Binding.RegisteredAt = "2026-11-02T00:00:00Z"
+				case "handoff":
+					base.admission.Handoff = strings.Repeat("e", 64)
+				case "effective-uid":
+					base.admission.Kernel.EffectiveUID++
+				}
+			})
+			if p.daemon.observeHeldProcess(processContext(t), base.execution.session, base.execution.generation) != nil {
+				t.Fatal("reply used admission that changed across kernel read")
+			}
+			requireSameProcessJournal(t, before, witnessProcessJournal(t, p.daemon.journal.store.dir))
+		})
+	}
+}
+
+// Caller cancellation omits the observation without discarding the original
+// hold or changing its durable obligation. A fresh caller observes the same
+// live child afterward, with no new admission, execution or journal effect.
+func TestHeldProofCancellationPreservesOwnership(t *testing.T) {
+	p, base, q := selectedHeldFixture(t)
+	o := &interleavedProcessOwner{selectedHeldOwner: base}
+	p.daemon.owner = o
+	selectedCall(t, p, "launch", q)
+	before := witnessProcessJournal(t, p.daemon.journal.store.dir)
+	entered := make(chan struct{})
+	o.setHook(func(ctx context.Context, read int) {
+		if read == 1 {
+			close(entered)
+			<-ctx.Done()
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	result := make(chan *runner.OwnedProcessEvidence, 1)
+	go func() { result <- p.daemon.observeHeldProcess(ctx, base.execution.session, base.execution.generation) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("observation did not reach admission boundary")
+	}
+	cancel()
+	select {
+	case got := <-result:
+		if got != nil {
+			t.Fatal("cancelled caller received process proof")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled observation did not join")
+	}
+	o.setHook(nil)
+	if got := p.daemon.observeHeldProcess(processContext(t), base.execution.session, base.execution.generation); got == nil || *got != base.admission.Kernel {
+		t.Fatal("cancellation lost retained ownership")
+	}
+	if p.daemon.provedNoStart(processContext(t), q["operation_id"].(string)) || base.starts.Load() != 1 || base.admissions.Load() != 1 {
+		t.Fatal("cancelled lookup changed durable lifecycle")
+	}
+	requireSameProcessJournal(t, before, witnessProcessJournal(t, p.daemon.journal.store.dir))
+}
+
+// An ambiguous retained index is unknown, even if one entry has valid proof.
+// Removing the fixture ambiguity restores that original proof without a spawn.
+func TestHeldProofAmbiguousExecutionIndexOmitsEvidence(t *testing.T) {
+	p, o, q := selectedHeldFixture(t)
+	selectedCall(t, p, "launch", q)
+	e := o.execution
+	ctx := processContext(t)
+	if p.daemon.observeHeldProcess(ctx, e.session, e.generation) == nil {
+		t.Fatal("original positive control unavailable")
+	}
+	other := &selectedExecution{session: e.session, generation: e.generation}
+	p.daemon.mu.Lock()
+	p.daemon.executions[other] = struct{}{}
+	p.daemon.mu.Unlock()
+	for range 8 {
+		if p.daemon.observeHeldProcess(ctx, e.session, e.generation) != nil {
+			t.Fatal("ambiguous index selected an owner")
+		}
+	}
+	p.daemon.mu.Lock()
+	delete(p.daemon.executions, other)
+	p.daemon.mu.Unlock()
+	if p.daemon.observeHeldProcess(ctx, e.session, e.generation) == nil || o.starts.Load() != 1 {
+		t.Fatal("original ownership was not preserved")
+	}
+}
+
+// A malformed saved proof refuses the complete operation lookup and cannot
+// borrow a still-live handle. Restoring the exact fixture bytes is an explicit
+// positive control; observation itself never repairs or resubmits anything.
+func TestHeldProofRecoveryRejectsMalformedSnapshots(t *testing.T) {
+	p, o, q := selectedHeldFixture(t)
+	selectedCall(t, p, "launch", q)
+	id := q["operation_id"].(string)
+	path := filepath.Join(p.daemon.journal.store.dir, id+".json")
+	valid, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutations := map[string]func(map[string]any){
+		"proof-key-case": func(m map[string]any) {
+			p := m["held_process"].(map[string]any)
+			p["admissionDigest"] = p["AdmissionDigest"]
+			delete(p, "AdmissionDigest")
+		},
+		"unknown-proof-member": func(m map[string]any) { m["held_process"].(map[string]any)["unverified"] = true },
+		"missing-real-uid": func(m map[string]any) {
+			delete(m["held_process"].(map[string]any)["Kernel"].(map[string]any), "RealUID")
+		},
+		"kernel-key-case": func(m map[string]any) {
+			k := m["held_process"].(map[string]any)["Kernel"].(map[string]any)
+			k["bootID"] = k["BootID"]
+			delete(k, "BootID")
+		},
+		"unknown-kernel-member": func(m map[string]any) { m["held_process"].(map[string]any)["Kernel"].(map[string]any)["stale"] = true },
+		"missing-zero-field": func(m map[string]any) {
+			delete(m["held_process"].(map[string]any)["Kernel"].(map[string]any), "StartUsec")
+		},
+		"wrong-operation": func(m map[string]any) {
+			other := "22222222-2222-4222-8222-222222222222"
+			m["held_process"].(map[string]any)["Operation"] = other
+			m["result"].(map[string]any)["operation_id"] = other
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if err := os.WriteFile(path, valid, 0600); err != nil {
+					t.Error(err)
+				}
+			}()
+			var object map[string]any
+			if err := json.Unmarshal(valid, &object); err != nil {
+				t.Fatal(err)
+			}
+			mutate(object)
+			invalid, err := json.Marshal(object)
+			if err != nil || bytes.Equal(invalid, valid) {
+				t.Fatal("malformed snapshot control not applied", err)
+			}
+			if err := os.WriteFile(path, invalid, 0600); err != nil {
+				t.Fatal(err)
+			}
+			before := witnessProcessJournal(t, p.daemon.journal.store.dir)
+			if _, _, err := p.daemon.journal.read(id); !errors.Is(err, errSelectedJournal) {
+				t.Fatal("malformed private proof accepted", err)
+			}
+			if p.daemon.observeHeldProcess(processContext(t), o.execution.session, o.execution.generation) != nil ||
+				p.daemon.provedNoStart(processContext(t), id) {
+				t.Fatal("malformed persistence yielded lifecycle proof")
+			}
+			data, exit := p.Call(processContext(t), selectedManagerProtocol, "status", operationRequest(t, id))
+			selectedCode(t, data, exit, "session_host_unavailable")
+			data, exit = p.Call(processContext(t), selectedManagerProtocol, "launch", memberOperationBytes(t, q))
+			selectedCode(t, data, exit, "session_host_unavailable")
+			if o.starts.Load() != 1 || o.admissions.Load() != 1 {
+				t.Fatal("malformed snapshot replayed execution")
+			}
+			requireSameProcessJournal(t, before, witnessProcessJournal(t, p.daemon.journal.store.dir))
+			if err := os.WriteFile(path, valid, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if p.daemon.observeHeldProcess(processContext(t), o.execution.session, o.execution.generation) == nil {
+				t.Fatal("valid neighboring snapshot refused")
+			}
+		})
+	}
+}
+
+// Ambiguous saved no-start remains unavailable after daemon replacement.
+// Status, cancel and launch preserve its indexed obligation and perform no
+// admission/start; a valid terminal record still replays after explicit repair.
+func TestOperationJournalRestartKeepsAmbiguousDecisionUnknown(t *testing.T) {
+	p, o, _, q := selectedFixture(t)
+	delete(q, "notification")
+	o.admitHook = func(context.Context, string, []byte) error { return ordinaryManagerRefusal{code: "policy_refused"} }
+	id := q["operation_id"].(string)
+	request := memberOperationBytes(t, q)
+	data, exit := p.Call(processContext(t), selectedManagerProtocol, "launch", request)
+	selectedCode(t, data, exit, "policy_refused")
+	if !p.daemon.provedNoStart(processContext(t), id) {
+		t.Fatal("valid initial decision missing")
+	}
+	directory := p.daemon.journal.store.dir
+	path := filepath.Join(directory, id+".json")
+	valid, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeSelected(t, p)
+	invalid := bytes.Replace(valid, []byte(`"no_start_proved":true`), []byte(`"no_start_proved":false,"no_start_proved":true`), 1)
+	if bytes.Equal(invalid, valid) {
+		t.Fatal("duplicate-proof control not applied")
+	}
+	if err := os.WriteFile(path, invalid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := registerHostPlugin(context.Background(), time.Now().Add(20*time.Second), directory, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeSelected(t, restarted) })
+	o.plugin = restarted
+	before := witnessProcessJournal(t, directory)
+	if restarted.daemon.provedNoStart(processContext(t), id) {
+		t.Fatal("restart normalized ambiguous no-start")
+	}
+	for _, kind := range []string{"status", "cancel", "launch"} {
+		input := operationRequest(t, id)
+		if kind == "launch" {
+			input = request
+		}
+		data, exit := restarted.Call(processContext(t), selectedManagerProtocol, kind, input)
+		selectedCode(t, data, exit, "session_host_unavailable")
+	}
+	if !restarted.daemon.journal.known[id] || o.starts.Load() != 0 || o.admissions.Load() != 1 {
+		t.Fatal("restart discarded or replayed obligation")
+	}
+	requireSameProcessJournal(t, before, witnessProcessJournal(t, directory))
+	if err := os.WriteFile(path, valid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !restarted.daemon.provedNoStart(processContext(t), id) {
+		t.Fatal("restored terminal control unavailable")
+	}
+	data, exit = restarted.Call(processContext(t), selectedManagerProtocol, "launch", request)
+	selectedCode(t, data, exit, "policy_refused")
+	if o.starts.Load() != 0 || o.admissions.Load() != 1 {
+		t.Fatal("historical terminal replay re-entered admission")
 	}
 }

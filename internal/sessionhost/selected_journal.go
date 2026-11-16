@@ -179,19 +179,74 @@ func (j *selectedOperationJournal) readLocked(id string) (selectedOperationEntry
 		return entry, false, errSelectedJournal
 	}
 	data, err := io.ReadAll(io.LimitReader(f, schema.Limit+1025))
-	if err != nil || len(data) > schema.Limit+1024 || json.Unmarshal(data, &entry) != nil || (!entry.Cancelled && (!notificationSHA256(entry.Digest) || (entry.Kind != "launch" && entry.Kind != "resume"))) || (len(entry.Result) != 0 && !validSelectedResult(entry.Result)) {
+	if err != nil || len(data) > schema.Limit+1024 {
 		return selectedOperationEntry{}, false, errSelectedJournal
 	}
-	if (len(entry.Refusal) != 0 && schema.Validate("refusal.schema.json", entry.Refusal) != nil) || (len(entry.Result) != 0 && len(entry.Refusal) != 0) {
-		return selectedOperationEntry{}, false, errSelectedJournal
-	}
-	if entry.NoStart && (!entry.Cancelled && len(entry.Refusal) == 0 || len(entry.Result) != 0) {
-		return selectedOperationEntry{}, false, errSelectedJournal
-	}
-	if entry.Started != nil && (!validSelectedStarted(entry) || entry.NoStart || entry.Cancelled || len(entry.Refusal) != 0) {
+	entry, err = decodeSelectedOperationEntry(id, data)
+	if err != nil {
 		return selectedOperationEntry{}, false, errSelectedJournal
 	}
 	return entry, true, nil
+}
+
+// These are private storage keys, not a replacement wire schema. The pinned
+// strict JSON reader detects ambiguity before typed decoding can normalize it.
+// Validate original bytes: canonicalization must not strip an unknown member.
+func decodeSelectedOperationEntry(id string, data []byte) (selectedOperationEntry, error) {
+	var entry selectedOperationEntry
+	if _, err := schema.CanonicalJSON(data); err != nil {
+		return entry, errSelectedJournal
+	}
+	object, ok := selectedJournalObject(data, false,
+		"cancelled", "no_start_proved", "held_process", "digest", "kind", "submitted_at", "result", "refusal")
+	if !ok {
+		return entry, errSelectedJournal
+	}
+	if raw, exists := object["held_process"]; exists {
+		proof, ok := selectedJournalObject(raw, true, "AdmissionDigest", "Operation", "Session", "Generation", "Kernel")
+		if !ok {
+			return entry, errSelectedJournal
+		}
+		if _, ok := selectedJournalObject(proof["Kernel"], true, "Execution", "PID", "RealUID", "EffectiveUID",
+			"BootID", "Platform", "StartTicks", "StartSec", "StartUsec", "Executable"); !ok {
+			return entry, errSelectedJournal
+		}
+	}
+	if json.Unmarshal(data, &entry) != nil ||
+		(!entry.Cancelled && (!notificationSHA256(entry.Digest) || (entry.Kind != "launch" && entry.Kind != "resume"))) ||
+		(entry.Cancelled && (len(entry.Result) != 0 || len(entry.Refusal) != 0)) ||
+		(len(entry.Refusal) != 0 && schema.Validate("refusal.schema.json", entry.Refusal) != nil) ||
+		(len(entry.Result) != 0 && len(entry.Refusal) != 0) {
+		return selectedOperationEntry{}, errSelectedJournal
+	}
+	if len(entry.Result) != 0 {
+		var result struct {
+			Operation string `json:"operation_id"`
+		}
+		if !validSelectedResult(entry.Result) || json.Unmarshal(entry.Result, &result) != nil || result.Operation != id {
+			return selectedOperationEntry{}, errSelectedJournal
+		}
+	}
+	if entry.NoStart && (!entry.Cancelled && len(entry.Refusal) == 0 || len(entry.Result) != 0) {
+		return selectedOperationEntry{}, errSelectedJournal
+	}
+	if entry.Started != nil && (!validSelectedStarted(entry) || entry.NoStart || entry.Cancelled || len(entry.Refusal) != 0) {
+		return selectedOperationEntry{}, errSelectedJournal
+	}
+	return entry, nil
+}
+
+func selectedJournalObject(data []byte, exact bool, names ...string) (map[string]json.RawMessage, bool) {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(data, &object) != nil || object == nil || exact && len(object) != len(names) {
+		return nil, false
+	}
+	for name, raw := range object {
+		if !notificationOneOf(name, names...) || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil, false
+		}
+	}
+	return object, true
 }
 
 func (j *selectedOperationJournal) write(id string, entry selectedOperationEntry) error {
@@ -203,6 +258,11 @@ func (j *selectedOperationJournal) write(id string, entry selectedOperationEntry
 	data, err := json.Marshal(entry)
 	if err != nil || len(data) > schema.Limit+1024 {
 		return errSelectedJournal
+	}
+	// Refuse invalid state before the append-only index or pending marker
+	// changes. Read and write must enforce the same lifecycle correlation.
+	if _, err := decodeSelectedOperationEntry(id, data); err != nil {
+		return err
 	}
 	old, exists, err := j.readLocked(id)
 	if err != nil {
