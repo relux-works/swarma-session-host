@@ -8,6 +8,35 @@ import (
 	"testing"
 )
 
+// Store fixtures need the same safe ancestry as a real store. The shared system
+// temporary directory can be writable by other users, so it is not a valid
+// positive fixture. Resolve only this test's cache parent; symlink rejection in
+// the store itself is exercised with a separate, deliberately linked child.
+func managerTimerPrivateFixtureDirectory(t *testing.T) string {
+	t.Helper()
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cache, err = filepath.EvalSymlinks(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := os.MkdirTemp(cache, "sessionhost-timer-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(directory); err != nil {
+			t.Error(err)
+		}
+	})
+	return directory
+}
+
 func managerTimerInitialLedger(t *testing.T) map[string]any {
 	t.Helper()
 	data := `{"version":1,"execution_id":"fixture-execution","ledger_id":"00000000-0000-4000-8000-000000000003","revision_high_water":0,"opportunity_high_water":0,"registration":null,"registration_state":"disabled","phase_revision":0,"activation_request":null,"expires_boot_id":null,"expires_monotonic_ns":null,"next_due_boot_id":null,"next_due_ns":null,"active":null,"terminal":[]}` + "\n"
@@ -20,7 +49,7 @@ func managerTimerInitialLedger(t *testing.T) map[string]any {
 
 func managerTimerStoreFixture(t *testing.T, durability func(string) error) (*managerTimerStore, managerTimerStoreWitness, map[string]any) {
 	t.Helper()
-	directory := t.TempDir()
+	directory := managerTimerPrivateFixtureDirectory(t)
 	ledger := managerTimerInitialLedger(t)
 	var witness managerTimerStoreWitness
 	s, err := initializeManagerTimerStore(directory, ledger, func(w managerTimerStoreWitness) error { witness = w; return nil }, durability)
@@ -122,7 +151,7 @@ func TestManagerTimerStoreDurabilityFailures(t *testing.T) {
 	for _, stage := range []string{"initialize_file", "initialize_lock", "initialize_directory"} {
 		t.Run(stage, func(t *testing.T) {
 			calls := 0
-			directory := t.TempDir()
+			directory := managerTimerPrivateFixtureDirectory(t)
 			s, err := initializeManagerTimerStore(directory, managerTimerInitialLedger(t), func(managerTimerStoreWitness) error { calls++; return nil }, func(at string) error {
 				if at == stage {
 					return errors.New("fixture_sync_failure")
@@ -158,10 +187,11 @@ func TestManagerTimerStoreDurabilityFailures(t *testing.T) {
 	}
 }
 
-// Symlink ancestry and a swapped lock cannot redirect an owned store's writes.
+// Symlink or shared-writable ancestry and a swapped lock cannot redirect an
+// owned store's writes.
 // A normal named directory is the nearby positive control above.
 func TestManagerTimerStoreHeldAncestryAndLiveLock(t *testing.T) {
-	parent := t.TempDir()
+	parent := managerTimerPrivateFixtureDirectory(t)
 	real := filepath.Join(parent, "real")
 	if err := os.Mkdir(real, 0700); err != nil {
 		t.Fatal(err)
@@ -172,6 +202,23 @@ func TestManagerTimerStoreHeldAncestryAndLiveLock(t *testing.T) {
 	}
 	if s, err := initializeManagerTimerStore(alias, managerTimerInitialLedger(t), func(managerTimerStoreWitness) error { return nil }, nil); err != managerTimerStateInvalid || s != nil {
 		t.Fatalf("symlink ancestry=%v", err)
+	}
+	unsafe := filepath.Join(parent, "unsafe")
+	if err := os.Mkdir(unsafe, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unsafe, 0777); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(unsafe, "store")
+	if err := os.Mkdir(child, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := initializeManagerTimerStore(child, managerTimerInitialLedger(t), func(managerTimerStoreWitness) error { return nil }, nil); err != managerTimerStateInvalid || s != nil {
+		t.Fatalf("shared-writable ancestry=%v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(child, "timer.lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unsafe ancestry wrote a lock: %v", err)
 	}
 	s, witness, ledger := managerTimerStoreFixture(t, nil)
 	if err := os.Rename(filepath.Join(witness.directory, "timer.lock"), filepath.Join(witness.directory, "old.lock")); err != nil {
@@ -189,7 +236,7 @@ func TestManagerTimerStoreHeldAncestryAndLiveLock(t *testing.T) {
 // Explicit init needs an actual witness writer and a wholly unused footprint;
 // it cannot repair a surviving journal by silently creating a replacement lock.
 func TestManagerTimerStoreInitializationWitnessAndFootprint(t *testing.T) {
-	directory := t.TempDir()
+	directory := managerTimerPrivateFixtureDirectory(t)
 	if s, err := initializeManagerTimerStore(directory, managerTimerInitialLedger(t), nil, nil); err != managerTimerStateInvalid || s != nil {
 		t.Fatalf("unwitnessed init=%v", err)
 	}
