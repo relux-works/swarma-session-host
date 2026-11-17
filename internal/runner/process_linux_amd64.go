@@ -736,7 +736,7 @@ func heldLinuxExecutable(ctx context.Context, child int) (heldLinuxImage, error)
 	f := os.NewFile(uintptr(fd), "owned-executable")
 	defer f.Close()
 	before, err := f.Stat()
-	if err != nil || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > 128<<20 {
+	if err != nil || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > 512<<20 {
 		return heldLinuxImage{}, errChildBirthUnavailable
 	}
 	identity, ok := heldLinuxImageIdentity(before)
@@ -758,7 +758,16 @@ func heldLinuxExecutable(ctx context.Context, child int) (heldLinuxImage, error)
 		remaining -= int64(n)
 	}
 	after, err := f.Stat()
-	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+	if err != nil {
+		return heldLinuxImage{}, errChildBirthUnavailable
+	}
+	// The full identity, ctime included, must be unchanged across the scan:
+	// a same-size rewrite with mtime restored still moves ctime.
+	afterIdentity, ok := heldLinuxImageIdentity(after)
+	if !ok || !identity.sameFile(afterIdentity) {
+		return heldLinuxImage{}, errChildBirthUnavailable
+	}
+	if ctx.Err() != nil {
 		return heldLinuxImage{}, errChildBirthUnavailable
 	}
 	identity.digest = hex.EncodeToString(hash.Sum(nil))
