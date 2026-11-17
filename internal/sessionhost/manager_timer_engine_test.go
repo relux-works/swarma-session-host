@@ -33,6 +33,7 @@ type managerTimerProviderFixture struct {
 	resultReason                                                              string
 	invalidatedIDs                                                            map[string]bool
 	pendingInvalidation                                                       bool
+	resultMutation                                                            func(map[string]any)
 }
 
 func timerFixtureClone(o map[string]any) map[string]any {
@@ -283,8 +284,11 @@ func (f *managerTimerProviderFixture) provider(_ context.Context, frame []byte, 
 	digest := timerFixtureHash(evidence)
 	proof := map[string]any{"issuer_binding_digest": call["binding_digest"], "source_revision": managerTimerNumber(int64(f.revision)), "evidence_ref": "/fixture/evidence/provider-" + strconv.Itoa(f.revision) + ".json", "evidence_digest": digest}
 	result := map[string]any{"protocol": managerTimerProtocol, "op": op, "request_id": call["request_id"], "attempt_id": call["attempt_id"], "binding_digest": call["binding_digest"], "request_digest": call["request_digest"], "disposition": f.disposition, "native": timerFixtureClone(f.native), "claim": f.claim, "observed_clock": timerFixtureClone(f.owner.clock), "reason": reason, "eligible_at_enqueue": enqueue, "eligible_at_start": start, "proof": proof}
-	if f.claim == nil {
-		result["claim"] = nil
+	if f.claim != nil {
+		result["claim"] = timerFixtureClone(f.claim)
+	}
+	if f.resultMutation != nil {
+		f.resultMutation(result)
 	}
 	out := timerFixtureBytes(result)
 	f.issued[digest] = append([]byte{}, out...)
@@ -293,6 +297,118 @@ func (f *managerTimerProviderFixture) provider(_ context.Context, frame []byte, 
 		return nil, errors.New("fixture_lost_reply")
 	}
 	return out, nil
+}
+
+// An admitted source can contradict its own proof. Those well-shaped reports
+// retain the last proven attempt and durably fence admission, including reopen
+// and later valid Query. Invalid/unverified reports are separate tests below;
+// the injected provider here still receives only declared calls and Binding.
+func TestManagerTimerAuthoritativeContradictionFence(t *testing.T) {
+	for _, which := range []string{"same_revision", "regressing_revision", "native_replacement", "changed_claim", "terminal_regression", "same_revision_at_capacity"} {
+		t.Run(which, func(t *testing.T) {
+			e, f := managerTimerEngineFixture(t)
+			ctx := context.Background()
+			if err := e.poll(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.recover(ctx); err != nil {
+				t.Fatalf("valid newer observation=%v", err)
+			}
+			if which == "same_revision_at_capacity" {
+				next, err := cloneManagerTimerObject(e.ledger)
+				if err != nil {
+					t.Fatal(err)
+				}
+				next["phase_revision"] = json.Number("9007199254740991")
+				if err := e.persist(next); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := timerFixtureClone(timerObject(e.ledger, "active"))
+			phase := timerNumber(e.ledger, "phase_revision")
+			previousRevision := int64(f.revision) // The issuer's own counter, not Host state.
+			f.resultMutation = func(result map[string]any) {
+				switch which {
+				case "same_revision", "same_revision_at_capacity":
+					timerObject(result, "proof")["source_revision"] = managerTimerNumber(previousRevision)
+				case "regressing_revision":
+					timerObject(result, "proof")["source_revision"] = managerTimerNumber(previousRevision - 1)
+				case "native_replacement":
+					timerObject(result, "native")["item_id"] = "fixture-contradictory-item"
+				case "changed_claim":
+					claim := timerObject(result, "claim")
+					claim["expires_monotonic_ns"] = managerTimerNumber(timerNumber(claim, "expires_monotonic_ns") - 1)
+				case "terminal_regression":
+					result["disposition"] = "completed_failed"
+				}
+				if err := validateManagerTimerRecord("ProviderResult", result); err != nil {
+					t.Fatalf("contradiction plant failed shape precondition: %v", err)
+				}
+			}
+			want := managerTimerQueueUnknown
+			if which == "same_revision" || which == "same_revision_at_capacity" {
+				want = managerTimerRequestConflict
+			}
+			if err := e.recover(ctx); err != want {
+				t.Fatalf("contradictory authority=%v want %v", err, want)
+			}
+			if e.ledger["registration_state"] != "fenced" || !timerEqual(before, e.ledger["active"]) {
+				t.Fatal("contradiction changed proven intent or lost the fence")
+			}
+			wantPhase := phase + 1
+			if which == "same_revision_at_capacity" {
+				wantPhase = phase
+			}
+			if timerNumber(e.ledger, "phase_revision") != wantPhase {
+				t.Fatal("fence did not retain its bounded phase revision")
+			}
+			e = reopenManagerTimerFixture(t, e)
+			if e.ledger["registration_state"] != "fenced" || !timerEqual(before, e.ledger["active"]) {
+				t.Fatal("reopen lost the durable fence or retained proof")
+			}
+			f.resultMutation = nil
+			if err := e.recover(ctx); err != nil {
+				t.Fatalf("valid reconciliation=%v", err)
+			}
+			if e.ledger["registration_state"] != "fenced" || f.snapshots != 1 || f.claims != 1 || f.items != 1 || f.turns != 1 || f.counts["reserve"] != 1 || f.counts["commit"] != 1 {
+				t.Fatal("reconciliation cleared the fence or repeated an effect")
+			}
+		})
+	}
+}
+
+// Exact repeated Query evidence is permitted at an unchanged source revision;
+// newer noncontradictory evidence also progresses. Neither creates an effect.
+func TestManagerTimerExactObservationalProofReplay(t *testing.T) {
+	e, f := managerTimerEngineFixture(t)
+	ctx := context.Background()
+	if err := e.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	original := e.ports.provider
+	var retained []byte
+	e.ports.provider = func(ctx context.Context, frame []byte, binding map[string]any) ([]byte, error) {
+		if retained != nil {
+			return append([]byte{}, retained...), nil
+		}
+		result, err := original(ctx, frame, binding)
+		if err == nil {
+			retained = append([]byte{}, result...)
+		}
+		return result, err
+	}
+	for i := 0; i < 2; i++ {
+		if err := e.recover(ctx); err != nil {
+			t.Fatalf("exact observational replay %d=%v", i, err)
+		}
+	}
+	e.ports.provider = original
+	if err := e.recover(ctx); err != nil {
+		t.Fatalf("newer observation=%v", err)
+	}
+	if e.ledger["registration_state"] == "fenced" || f.snapshots != 1 || f.turns != 1 || f.counts["reserve"] != 1 || f.counts["commit"] != 1 {
+		t.Fatal("valid repeated/newer observations fenced or duplicated an effect")
+	}
 }
 
 func (f *managerTimerProviderFixture) useful() map[string]any {

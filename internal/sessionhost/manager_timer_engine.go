@@ -309,21 +309,24 @@ func (e *managerTimerEngine) applyResult(result map[string]any) error {
 	prior := timerObject(a, "provider_evidence")
 	if prior != nil {
 		before, after := timerNumber(timerObject(prior, "proof"), "source_revision"), timerNumber(timerObject(result, "proof"), "source_revision")
-		if after < before || after == before && !timerEqual(prior, result) {
-			return managerTimerQueueUnknown
+		if after < before {
+			return e.fenceProviderContradiction(managerTimerQueueUnknown)
+		}
+		if after == before && !timerEqual(prior, result) {
+			return e.fenceProviderContradiction(managerTimerRequestConflict)
 		}
 		if managerTimerMember(prior["disposition"], "completed_ok|completed_failed|completed_interrupted") && prior["disposition"] != result["disposition"] {
-			return managerTimerQueueUnknown
+			return e.fenceProviderContradiction(managerTimerQueueUnknown)
 		}
 	}
 	for _, key := range []string{"claim_id", "item_id", "turn_id"} {
 		old := timerObject(a, "native")[key]
 		if old != nil && timerObject(result, "native")[key] != old {
-			return managerTimerQueueUnknown
+			return e.fenceProviderContradiction(managerTimerQueueUnknown)
 		}
 	}
 	if result["claim"] != nil && prior != nil && prior["claim"] != nil && !timerEqual(prior["claim"], result["claim"]) {
-		return managerTimerQueueUnknown
+		return e.fenceProviderContradiction(managerTimerQueueUnknown)
 	}
 	disposition := timerString(result, "disposition")
 	if disposition == "absent" || disposition == "suppressed" {
@@ -358,6 +361,30 @@ func (e *managerTimerEngine) applyResult(result map[string]any) error {
 	a["native"] = result["native"]
 	a["provider_evidence"] = result
 	return e.persist(next)
+}
+
+// Only call's admitted, fully correlated proof can reach this transition.
+// Preserve the last proven attempt verbatim and fence future admission across
+// reopen; a later Query can reconcile the attempt but never clears the fence.
+func (e *managerTimerEngine) fenceProviderContradiction(code managerTimerCode) error {
+	if e.ledger["registration_state"] == "fenced" {
+		return code
+	}
+	next, err := cloneManagerTimerObject(e.ledger)
+	if err != nil {
+		return err
+	}
+	next["registration_state"] = "fenced"
+	phase := timerNumber(next, "phase_revision")
+	// Exhaustion cannot prevent retaining this safety fence or wrap its counter.
+	// No lifecycle operation may reactivate a fenced registration at either value.
+	if phase < managerTimerMaxU {
+		next["phase_revision"] = managerTimerNumber(phase + 1)
+	}
+	if err = e.persist(next); err != nil {
+		return err
+	}
+	return code
 }
 
 func (e *managerTimerEngine) closeAttempt(outcome string, ack any) error {
