@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -35,9 +37,11 @@ func sparseImage(t *testing.T, size int64, patches map[int64]byte) string {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Prime relatime: the first read after creation would move atime/ctime
-	// during the capture scan itself; after this read atime exceeds mtime and
-	// later reads leave the identity untouched, as for an installed binary.
+	// Prime relatime: settle the atime update of the first read before the
+	// capture scan, so file metadata stays quiescent while scanning, as for
+	// an installed binary whose atime already exceeds mtime. An atime-only
+	// update does not change ctime, so this is not what protects the scan's
+	// before/after identity comparison; it only keeps the fixture quiet.
 	if size > 0 {
 		r, err := os.Open(path)
 		if err != nil {
@@ -53,8 +57,10 @@ func sparseImage(t *testing.T, size int64, patches map[int64]byte) string {
 	return path
 }
 
-// exeDirFD returns a directory FD whose "exe" entry resolves to target, the
-// same openat route the capture uses beneath a pinned child proc directory.
+// exeDirFD returns a directory FD whose "exe" entry resolves to target,
+// reached with the same openat call the capture uses. Here "exe" is an
+// ordinary symlink to the fixture file, not the procfs magic link that the
+// production capture opens beneath a pinned child proc directory.
 func exeDirFD(t *testing.T, target string) int {
 	t.Helper()
 	dir := t.TempDir()
@@ -218,8 +224,7 @@ func selfRchar(t *testing.T) uint64 {
 	return 0
 }
 
-// Claim: a later observation of the unchanged image reads no image content
-// (rchar moves by metadata only), beside the first-scan and changed controls.
+// Claim: the identity re-check itself reads no image content (rchar moves by metadata only), beside the first-scan and changed controls.
 func TestHeldExecutableMatchesReadsNoContent(t *testing.T) {
 	const size = 64 << 20
 	path := sparseImage(t, size, map[int64]byte{size - 1: 0x3c})
@@ -246,6 +251,162 @@ func TestHeldExecutableMatchesReadsNoContent(t *testing.T) {
 	}
 	if err := heldLinuxExecutableMatches(child, img); err == nil {
 		t.Fatal("size-changed image accepted on re-observation")
+	}
+}
+
+// paddedFixtureBinary copies this test binary and sparse-extends the copy to
+// at least minSize bytes; trailing zeros do not affect exec, so the copy runs
+// as the same fixture child with a known, larger running image.
+func paddedFixtureBinary(t *testing.T, minSize int64) (string, int64) {
+	t.Helper()
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := os.Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	path := filepath.Join(t.TempDir(), "fixture-image")
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, err := io.Copy(out, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minSize > written {
+		if err := out.Truncate(minSize); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Settle the relatime atime update before spawn, as in sparseImage.
+	r, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Read(make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path, info.Size()
+}
+
+// startV2RunnerOnBinary starts a selected runner on binary with the ordinary
+// reaper held at a gate, mirroring startV2KernelRunner for a chosen image.
+func startV2RunnerOnBinary(t *testing.T, binary string) (*Server, func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	var once sync.Once
+	open := func() { once.Do(func() { close(gate) }) }
+	cfg := testConfig(t, "echo")
+	cfg.IdentifyV2 = true
+	cfg.Plan.Binary = binary
+	s, err := startWithReaperGate(cfg, captureChildBirth, waitOriginalChild, func() { <-gate })
+	if err != nil {
+		open()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { open(); s.Close() })
+	trackTestRunner(t, s)
+	// Qualify on the captured identity, not the capture error alone: a runner
+	// whose image capture failed still holds a valid identity, and tests of
+	// that failure must reach their assertions instead of skipping.
+	if !validLinuxIdentity(s.linux.identity) {
+		open()
+		if os.Getenv("SESSION_HOST_REQUIRE_LINUX_PIDFS") == "1" {
+			t.Fatalf("REQUIRED_LINUX_PIDFS_NOT_QUALIFIED: %v", s.linux.err)
+		}
+		t.Skipf("LINUX_PIDFS_NOT_QUALIFIED: %v", s.linux.err)
+	}
+	return s, open
+}
+
+// Claim: a second ProcessEvidence observation of the unchanged running image returns the same evidence while reading no image content.
+func TestProcessEvidenceSecondObservationReadsNoContent(t *testing.T) {
+	binary, size := paddedFixtureBinary(t, 32<<20)
+	want := referenceDigest(t, binary)
+	r0 := selfRchar(t)
+	s, open := startV2RunnerOnBinary(t, binary)
+	defer open()
+	spawnRead := selfRchar(t) - r0
+	if spawnRead < uint64(size) {
+		t.Fatalf("spawn capture read only %d of %d image bytes; counter not observing the capture scan", spawnRead, size)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first, err := s.ProcessEvidence(ctx)
+	if err != nil || first.Executable != want {
+		t.Fatal("valid positive: first observation evidence lost or misdigested", first, err)
+	}
+	r0 = selfRchar(t)
+	second, err := s.ProcessEvidence(ctx)
+	againRead := selfRchar(t) - r0
+	if err != nil || second != first {
+		t.Fatal("valid positive: second observation of unchanged image refused or changed", second, err)
+	}
+	if againRead > 1<<20 {
+		t.Fatalf("second ProcessEvidence read %d content bytes (spawn scan %d, image %d); observation re-hashed the unchanged image", againRead, spawnRead, size)
+	}
+	t.Logf("image=%d spawn_read=%d second_observation_read=%d", size, spawnRead, againRead)
+}
+
+// Claim: a failed image capture at spawn keeps ownership verified and the original child's ordinary service, with process evidence absent and no second spawn.
+func TestImageCaptureFailureKeepsOwnershipAndOrdinaryResult(t *testing.T) {
+	binary, size := paddedFixtureBinary(t, 536870913)
+	if size != 536870913 {
+		t.Fatal("setup: over-bound image has wrong size", size)
+	}
+	s, open := startV2RunnerOnBinary(t, binary)
+	defer open()
+	pid := s.pid
+	if s.linux.process != nil || s.linux.started != (OwnedProcessEvidence{}) {
+		t.Fatal("setup: over-bound image capture unexpectedly produced process evidence")
+	}
+	snapshot, _ := s.identifyV2Snapshot(v2RequestFor(s))
+	if snapshot.Result != "verified" || snapshot.Child == nil || snapshot.Child.PID != pid {
+		t.Fatal("ownership snapshot lost after image-capture failure", snapshot)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := s.ProcessEvidence(ctx)
+	elapsed := time.Since(start)
+	t.Logf("elapsed to absent process evidence: %v", elapsed)
+	if !errors.Is(err, errChildBirthUnavailable) {
+		t.Fatal("process evidence present after image-capture failure", err)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatal("absent process evidence was not prompt", elapsed)
+	}
+	client := testClient(t, s.cfg)
+	call(t, client, Request{Op: "claim", Execution: s.cfg.Execution, Epoch: 1}, "ok")
+	status := call(t, client, Request{Op: "status", Execution: s.cfg.Execution}, "ok")
+	if status.PID != pid || status.Exited {
+		t.Fatal("ordinary result lost or child replaced after image-capture failure", status)
+	}
+	if s.pid != pid || s.linux.process != nil {
+		t.Fatal("failed capture was retried or a second child was spawned")
+	}
+	if err := s.child.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	open()
+	select {
+	case <-s.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("original reaper did not join after image-capture failure")
 	}
 }
 
@@ -303,13 +464,17 @@ func TestHeldExecutableMutationDuringCaptureRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeIdentity, ok := heldLinuxImageIdentity(before)
+	if !ok {
+		t.Fatal("setup: pre-capture image identity unavailable")
+	}
 	mutated := false
+	ctimeMoved := false
 	hook := &scriptedContext{Context: context.Background(), onCall: func(n int) {
 		if n != 1 || mutated {
 			return
 		}
 		mutated = true
-		time.Sleep(5 * time.Millisecond) // guarantee ctime advances past capture stat
 		f, err := os.OpenFile(path, os.O_RDWR, 0)
 		if err != nil {
 			t.Error(err)
@@ -319,14 +484,45 @@ func TestHeldExecutableMutationDuringCaptureRefused(t *testing.T) {
 			t.Error(err)
 		}
 		f.Close()
-		// Restore mtime beside a fresh atime; ctime stays moved by both writes.
-		if err := os.Chtimes(path, time.Now(), before.ModTime()); err != nil {
-			t.Error(err)
+		// Restore mtime beside a fresh atime, then confirm by stat that
+		// ctime advanced past its pre-capture value, nudging it with
+		// Chtimes until the filesystem clock ticks. The loop exits only on
+		// an observed ctime change, so a coarse timestamp clock delays
+		// setup instead of silently leaving the mutation unapplied.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if err := os.Chtimes(path, time.Now(), before.ModTime()); err != nil {
+				t.Error(err)
+				return
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			identity, ok := heldLinuxImageIdentity(info)
+			if !ok {
+				t.Error("setup: mutated image identity unavailable")
+				return
+			}
+			if identity.ctime != beforeIdentity.ctime {
+				if identity.size != beforeIdentity.size || identity.mtime != beforeIdentity.mtime {
+					t.Error("setup: mutation changed size or mtime beside ctime")
+					return
+				}
+				ctimeMoved = true
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Error("setup: ctime did not advance after mutation; the ctime comparison cannot be exercised")
+				return
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}}
 	img, err := captureImage(t, hook, path)
-	if !mutated {
-		t.Fatal("mutation hook never ran inside the scan")
+	if !mutated || !ctimeMoved {
+		t.Fatal("setup: mutation with a moved ctime never landed inside the scan", mutated, ctimeMoved)
 	}
 	if err == nil || img.digest != "" {
 		t.Fatal("image mutated during capture accepted (ctime not compared)", err, img.digest)
