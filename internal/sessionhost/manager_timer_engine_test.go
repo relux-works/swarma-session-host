@@ -56,7 +56,7 @@ func managerTimerEngineFixture(t *testing.T) (*managerTimerEngine, *managerTimer
 	ledger["terminal"] = []any{}
 	owner.clock["monotonic_ns"] = ledger["next_due_ns"]
 	owner.clock["observed_at"] = "2026-11-17T17:30:00Z"
-	if err := s.save(ledger); err != nil {
+	if err := saveManagerTimerFixture(s, ledger); err != nil {
 		t.Fatal(err)
 	}
 	f := &managerTimerProviderFixture{t: t, owner: owner, native: managerTimerEmptyNative(), issued: map[string][]byte{}, issuedUseful: map[string][]byte{}, counts: map[string]int{}, seen: map[string]bool{}, commitDisposition: "completed_ok"}
@@ -445,6 +445,307 @@ func (f *managerTimerProviderFixture) startQueued() {
 func managerTimerAckPayload(e *managerTimerEngine) map[string]any {
 	a := timerObject(e.ledger, "active")
 	return map[string]any{"attempt_id": a["attempt_id"], "useful_digest": timerDigest("Useful", a["useful"]), "completion_digest": timerDigest("ProviderResult", a["provider_evidence"])}
+}
+
+// Release must disable future admission before cleanup, including a lost reply.
+// Running/success can still receive their exact Useful/completion/ACK; failed
+// effects retain their slot. These are private model ports, not a native arbiter.
+func TestManagerTimerReleaseRetainsDraining(t *testing.T) {
+	for _, disposition := range []string{"running", "completed_ok", "completed_failed", "completed_interrupted"} {
+		for _, lost := range []bool{false, true} {
+			t.Run(disposition+"/lost="+strconv.FormatBool(lost), func(t *testing.T) {
+				e, f := managerTimerEngineFixture(t)
+				ctx := context.Background()
+				f.commitDisposition = disposition
+				if err := e.poll(ctx); err != nil {
+					t.Fatal(err)
+				}
+				provider := e.ports.provider
+				e.ports.provider = func(ctx context.Context, frame []byte, binding map[string]any) ([]byte, error) {
+					call, err := decodeManagerTimerObject(frame)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if call["op"] == "release" {
+						e.store.mu.Lock()
+						stored, err := e.store.loadLocked()
+						e.store.mu.Unlock()
+						if err != nil {
+							t.Fatal(err)
+						}
+						if stored["registration_state"] != "draining" {
+							t.Error("Release reached provider without durable draining")
+						}
+					}
+					return provider(ctx, frame, binding)
+				}
+				if lost {
+					f.drop = "release"
+				}
+				want := error(nil)
+				if lost {
+					want = managerTimerQueueUnknown
+				}
+				if err := e.release(ctx); err != want {
+					t.Fatalf("Release=%v, want %v", err, want)
+				}
+				e = reopenManagerTimerFixture(t, e)
+				if e.ledger["registration_state"] != "draining" {
+					t.Error("Release draining did not survive reopen")
+				}
+				if err := e.recover(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if disposition == "running" {
+					if err := e.recordUseful(f.useful()); err != nil {
+						t.Fatal(err)
+					}
+					f.disposition = "completed_ok"
+					if err := e.recover(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if disposition == "running" || disposition == "completed_ok" {
+					if disposition == "completed_ok" {
+						if err := e.recordUseful(f.useful()); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := e.ack(ctx, managerTimerAckPayload(e)); err != nil {
+						t.Fatal(err)
+					}
+					if e.ledger["active"] != nil {
+						t.Fatal("proven successful cleanup failed to free its slot")
+					}
+				} else if err := e.recordUseful(f.useful()); err != managerTimerAckUnproven || e.ledger["active"] == nil {
+					t.Fatalf("failed cleanup lost retained slot: %v", err)
+				}
+				e = reopenManagerTimerFixture(t, e)
+				if e.ledger["registration_state"] != "draining" {
+					t.Error("reconciliation or ACK reenabled registration")
+				}
+				f.owner.clock["monotonic_ns"] = e.ledger["next_due_ns"]
+				want = managerTimerRegistrationStale
+				if e.ledger["active"] != nil {
+					want = managerTimerCoalesced
+				}
+				if err := e.poll(ctx); err != want || f.snapshots != 1 || f.counts["reserve"] != 1 || f.turns != 1 {
+					t.Fatalf("cleanup admitted another tick: err=%v snapshots=%d calls=%v turns=%d", err, f.snapshots, f.counts, f.turns)
+				}
+			})
+		}
+	}
+}
+
+// A normal success without Release keeps the registration usable at its next
+// genuine due time; the Release safety rule must not become a universal refusal.
+func TestManagerTimerOrdinaryAckAllowsNextDue(t *testing.T) {
+	e, f := managerTimerEngineFixture(t)
+	ctx := context.Background()
+	if err := e.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.recordUseful(f.useful()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ack(ctx, managerTimerAckPayload(e)); err != nil {
+		t.Fatal(err)
+	}
+	f.owner.clock["monotonic_ns"] = e.ledger["next_due_ns"]
+	if err := e.poll(ctx); err != nil || f.snapshots != 2 || f.turns != 2 {
+		t.Fatalf("valid next opportunity refused: %v, snapshots=%d turns=%d", err, f.snapshots, f.turns)
+	}
+}
+
+// Both handles cache idle before the first effect. A channel pauses its reply
+// after claim creation; the stale second handle's failing snapshot must never
+// replace that unresolved attempt. Channel joins, not a timeout, prove the result.
+func TestManagerTimerSharedStoreHandles(t *testing.T) {
+	e, f := managerTimerEngineFixture(t)
+	ports := e.ports
+	secondSnapshots := 0
+	ports.snapshot = func(context.Context, string) (string, error) {
+		secondSnapshots++
+		return "", errors.New("fixture_second_snapshot_failure")
+	}
+	second, err := newManagerTimerEngine(e.store, e.gate, ports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := e.ports.provider
+	paused, releaseReply, secondStarted := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	e.ports.provider = func(ctx context.Context, frame []byte, binding map[string]any) ([]byte, error) {
+		_, err := provider(ctx, frame, binding)
+		if err != nil {
+			return nil, err
+		}
+		close(paused)
+		<-releaseReply
+		return nil, errors.New("fixture_lost_reserve_reply")
+	}
+	firstDone, secondDone := make(chan error, 1), make(chan error, 1)
+	go func() { firstDone <- e.poll(context.Background()) }()
+	<-paused
+	go func() {
+		close(secondStarted)
+		secondDone <- second.poll(context.Background())
+	}()
+	<-secondStarted
+	close(releaseReply)
+	if err := <-firstDone; err != managerTimerQueueUnknown {
+		t.Fatalf("first Poll=%v", err)
+	}
+	if err := <-secondDone; err != managerTimerCoalesced {
+		t.Errorf("stale second Poll=%v, want coalesced", err)
+	}
+	e = reopenManagerTimerFixture(t, e)
+	if timerObject(e.ledger, "active")["phase"] != "reserve_unknown" || len(e.ledger["terminal"].([]any)) != 0 || secondSnapshots != 0 || f.snapshots != 1 || f.claims != 1 || f.counts["reserve"] != 1 {
+		t.Fatalf("shared store lost uncertainty: phase=%v terminal=%v secondSnapshots=%d calls=%v", timerObject(e.ledger, "active")["phase"], e.ledger["terminal"], secondSnapshots, f.counts)
+	}
+}
+
+// Equal high-waters do not establish freshness. A stale handle must not close
+// a newer release_unknown attempt; an exact-current write remains permitted.
+func TestManagerTimerFullLedgerCompareAndSwap(t *testing.T) {
+	e, f := managerTimerEngineFixture(t)
+	ctx := context.Background()
+	f.drop = "reserve"
+	if err := e.poll(ctx); err != managerTimerQueueUnknown {
+		t.Fatal(err)
+	}
+	// Hold every counter constant during the later phase-only transition.
+	next := timerFixtureClone(e.ledger)
+	next["registration_state"] = "draining"
+	if err := e.persist(next); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := newManagerTimerEngine(e.store, e.gate, e.ports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.drop = "release"
+	if err := e.recover(ctx); err != managerTimerQueueUnknown {
+		t.Fatal(err)
+	}
+	before := timerFixtureClone(e.ledger)
+	for _, counter := range []string{"revision_high_water", "opportunity_high_water", "phase_revision"} {
+		if before[counter] != stale.ledger[counter] {
+			t.Fatalf("CAS setup changed %s", counter)
+		}
+	}
+	if err := e.persist(timerFixtureClone(e.ledger)); err != nil {
+		t.Fatalf("current CAS refused: %v", err)
+	}
+	if err := stale.closeAttempt("no_effect", nil); err != managerTimerStateInvalid {
+		t.Errorf("stale same-highwater close=%v", err)
+	}
+	e = reopenManagerTimerFixture(t, e)
+	if !timerEqual(e.ledger, before) || timerObject(e.ledger, "active")["phase"] != "release_unknown" {
+		t.Fatal("stale CAS erased the durable unresolved release")
+	}
+}
+
+// Verified shape/proof alone cannot turn an impossible no-reason refusal into
+// success. Reserve/Commit and an unrelated Query retain their uncertain slot.
+func TestManagerTimerProviderReasonContext(t *testing.T) {
+	for _, op := range []string{"reserve", "commit", "query"} {
+		for _, disposition := range []string{"absent", "suppressed"} {
+			if op == "reserve" && disposition == "suppressed" {
+				continue // Reserve never allows suppressed, independently of reason.
+			}
+			t.Run(op+"/"+disposition, func(t *testing.T) {
+				e, f := managerTimerEngineFixture(t)
+				ctx := context.Background()
+				if op == "query" {
+					f.commitDisposition = "queued"
+					if err := e.poll(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+				f.resultMutation = func(result map[string]any) {
+					if result["op"] != op {
+						return
+					}
+					result["disposition"], result["reason"] = disposition, "none"
+					timerObject(result, "native")["turn_id"] = nil
+					result["eligible_at_start"] = nil
+				}
+				var err error
+				if op == "query" {
+					err = e.recover(ctx)
+				} else {
+					err = e.poll(ctx)
+				}
+				if err != managerTimerQueueUnknown {
+					t.Errorf("invalid %s %s/none=%v", op, disposition, err)
+				}
+				e = reopenManagerTimerFixture(t, e)
+				want := map[string]string{"reserve": "reserve_unknown", "commit": "commit_unknown", "query": "queued"}[op]
+				if timerObject(e.ledger, "active")["phase"] != want || len(e.ledger["terminal"].([]any)) != 0 {
+					t.Fatal("invalid provider reason freed the durable slot")
+				}
+			})
+		}
+	}
+}
+
+// The zero-effect reason table is grounded in the wire contract. Valid exact
+// refusals and explicit cleanup remain accepted; none cannot conceal a refused
+// Reserve/Commit, and provider_unavailable cannot carry a no-effect proof.
+func TestManagerTimerProviderReasonCompatibility(t *testing.T) {
+	for _, op := range []string{"reserve", "commit", "query", "release"} {
+		for _, disposition := range []string{"absent", "suppressed"} {
+			for _, reason := range []string{"none", "input_ineligible", "security_refused", "budget_refused", "expired", "binding_mismatch", "role_refused", "capability_missing", "cancelled", "provider_unavailable"} {
+				t.Run(op+"/"+disposition+"/"+reason, func(t *testing.T) {
+					result := managerTimerFixtureRecord(t, "ProviderResult-valid")
+					result["op"], result["disposition"], result["reason"] = op, disposition, reason
+					result["request_id"] = timerDigest("ProviderOperation", map[string]any{"attempt_id": result["attempt_id"], "op": op})
+					result["eligible_at_enqueue"] = nil
+					if op == "reserve" {
+						timerObject(result, "native")["item_id"] = nil
+					}
+					allowed := !(op == "reserve" && disposition == "suppressed") && reason != "provider_unavailable" && (reason != "none" || op == "release" || op == "query")
+					err := validateManagerTimerRecord("ProviderResult", result)
+					if allowed && err != nil || !allowed && err != managerTimerInvalid {
+						t.Fatalf("compatibility allowed=%v, got=%v", allowed, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+// A proven explicit Release or owner-cancel cleanup may report no-reason
+// absence/suppression. A lost Release reply is reconciled by Query after reopen.
+func TestManagerTimerProviderCleanupReasonPositive(t *testing.T) {
+	for _, disposition := range []string{"absent", "suppressed"} {
+		for _, cancelled := range []bool{false, true} {
+			t.Run(disposition+"/cancelled="+strconv.FormatBool(cancelled), func(t *testing.T) {
+				e, f := managerTimerEngineFixture(t)
+				ctx := context.Background()
+				f.commitDisposition = "queued"
+				if err := e.poll(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if cancelled {
+					next := timerFixtureClone(e.ledger)
+					next["registration_state"] = "cancelled"
+					if err := e.persist(next); err != nil {
+						t.Fatal(err)
+					}
+				}
+				f.resultMutation = func(result map[string]any) { result["disposition"] = disposition }
+				f.drop = "release"
+				if err := e.release(ctx); err != managerTimerQueueUnknown {
+					t.Fatalf("lost cleanup=%v", err)
+				}
+				e = reopenManagerTimerFixture(t, e)
+				if err := e.recover(ctx); err != nil || e.ledger["active"] != nil || f.turns != 0 || f.counts["release"] != 1 || f.counts["reserve"] != 1 {
+					t.Fatalf("valid cleanup refused or replayed: %v calls=%v", err, f.counts)
+				}
+			})
+		}
+	}
 }
 
 // The positive starts with zero claims, observes durable-before-effect through
@@ -926,7 +1227,7 @@ func TestManagerTimerEngineRotationRestartAndCapacity(t *testing.T) {
 	}
 	f.owner.clock["boot_id"] = "fixture-boot"
 	e.ledger["opportunity_high_water"] = managerTimerNumber(managerTimerMaxU)
-	if err := e.store.save(e.ledger); err != nil {
+	if err := saveManagerTimerFixture(e.store, e.ledger); err != nil {
 		t.Fatal(err)
 	}
 	f.owner.clock["monotonic_ns"] = e.ledger["next_due_ns"]

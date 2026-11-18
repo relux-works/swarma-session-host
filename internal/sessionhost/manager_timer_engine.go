@@ -34,7 +34,7 @@ type managerTimerPorts struct {
 }
 
 type managerTimerEngine struct {
-	mu     sync.Mutex // Timer operations only; never the ordinary/human input lock.
+	mu     *sync.Mutex // Shared store transaction; never the ordinary/human input lock.
 	store  *managerTimerStore
 	ledger map[string]any
 	gate   managerTimerGate
@@ -54,20 +54,39 @@ func newManagerTimerEngine(store *managerTimerStore, gate managerTimerGate, port
 	if store == nil || ports.observe == nil || ports.snapshot == nil || ports.provider == nil || ports.verifyProvider == nil || ports.verifyUseful == nil {
 		return nil, managerTimerCapabilityMissing
 	}
+	store.transaction.Lock()
+	defer store.transaction.Unlock()
 	store.mu.Lock()
 	ledger, err := store.loadLocked()
 	store.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	return &managerTimerEngine{store: store, ledger: ledger, gate: gate, ports: ports}, nil
+	return &managerTimerEngine{mu: &store.transaction, store: store, ledger: ledger, gate: gate, ports: ports}, nil
+}
+
+// Called under the shared transaction lock before any timer operation. Another
+// handle may have changed the durable phase without changing any high-water.
+func (e *managerTimerEngine) refresh() error {
+	if e.failed {
+		return managerTimerStateInvalid
+	}
+	e.store.mu.Lock()
+	ledger, err := e.store.loadLocked()
+	e.store.mu.Unlock()
+	if err != nil {
+		e.failed = true
+		return err
+	}
+	e.ledger = ledger
+	return nil
 }
 
 func (e *managerTimerEngine) persist(next map[string]any) error {
 	if e.failed {
 		return managerTimerStateInvalid
 	}
-	if err := e.store.save(next); err != nil {
+	if err := e.store.save(e.ledger, next); err != nil {
 		e.failed = true
 		return err
 	}
@@ -90,8 +109,8 @@ func managerTimerEmptyNative() map[string]any {
 func (e *managerTimerEngine) poll(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.failed {
-		return managerTimerStateInvalid
+	if err := e.refresh(); err != nil {
+		return err
 	}
 	if e.ledger["active"] != nil {
 		return managerTimerCoalesced
@@ -211,7 +230,7 @@ func (e *managerTimerEngine) poll(ctx context.Context) error {
 		err = e.gate.postClaim(e.ledger, owner, claim)
 	}
 	if err != nil {
-		if cleanupErr := e.release(ctx); cleanupErr != nil {
+		if cleanupErr := e.releaseLocked(ctx); cleanupErr != nil {
 			return cleanupErr
 		}
 		return err
@@ -286,6 +305,15 @@ func (e *managerTimerEngine) call(ctx context.Context, op string) (map[string]an
 			return nil, managerTimerQueueUnknown
 		}
 	}
+	// Query may observe a no-reason cleanup only when the durable owner state
+	// proves an explicit Release/cancel. An unrelated observation cannot turn a
+	// provider's silent refusal into a successful no-effect transition.
+	if managerTimerMember(result["disposition"], "absent|suppressed") && result["reason"] == "none" && op != "release" {
+		a := timerObject(e.ledger, "active")
+		if op != "query" || a["phase"] != "release_unknown" && e.ledger["registration_state"] != "cancelled" {
+			return nil, managerTimerQueueUnknown
+		}
+	}
 	if claim := timerObject(result, "claim"); claim != nil {
 		reg := timerObject(e.ledger, "registration")
 		created := timerObject(claim, "created_clock")
@@ -356,6 +384,14 @@ func (e *managerTimerEngine) applyResult(result map[string]any) error {
 		return err
 	}
 	a = timerObject(next, "active")
+	if result["op"] == "release" || a["phase"] == "release_unknown" {
+		// Even a Release from a claim-only phase may discover an already
+		// started effect. Query after a lost Release retains that same fence;
+		// a proven claim-only cleanup still permits a genuinely new interval.
+		if managerTimerMember(disposition, "queued|running|completed_ok|completed_failed|completed_interrupted") {
+			managerTimerDrainRegistration(next)
+		}
+	}
 	a["phase"] = phase
 	a["resume_phase"] = nil
 	a["native"] = result["native"]
@@ -406,7 +442,26 @@ func (e *managerTimerEngine) closeAttempt(outcome string, ack any) error {
 	return e.persist(next)
 }
 
+func managerTimerDrainRegistration(ledger map[string]any) {
+	if managerTimerMember(ledger["registration_state"], "active_unqualified|armed") {
+		ledger["registration_state"] = "draining"
+		if revision := timerNumber(ledger, "phase_revision"); revision < managerTimerMaxU {
+			ledger["phase_revision"] = managerTimerNumber(revision + 1)
+		}
+	}
+}
+
 func (e *managerTimerEngine) release(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.refresh(); err != nil {
+		return err
+	}
+	return e.releaseLocked(ctx)
+}
+
+// Poll/recovery already own the shared transaction; cleanup never reacquires it.
+func (e *managerTimerEngine) releaseLocked(ctx context.Context) error {
 	a := timerObject(e.ledger, "active")
 	if a == nil {
 		return managerTimerTickStale
@@ -417,6 +472,12 @@ func (e *managerTimerEngine) release(ctx context.Context) error {
 			return err
 		}
 		a = timerObject(next, "active")
+		// Reserve alone cannot start a turn. Once Commit may have happened,
+		// disable admission before cleanup, including a lost Release reply and
+		// a later ACK. A proven claim-only cleanup keeps the next interval usable.
+		if !managerTimerMember(a["phase"], "preparing|reserve_unknown|reserved") {
+			managerTimerDrainRegistration(next)
+		}
 		a["resume_phase"] = a["phase"]
 		a["phase"] = "release_unknown"
 		if err = e.persist(next); err != nil {
@@ -435,8 +496,8 @@ func (e *managerTimerEngine) release(ctx context.Context) error {
 func (e *managerTimerEngine) recover(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.failed {
-		return managerTimerStateInvalid
+	if err := e.refresh(); err != nil {
+		return err
 	}
 	a := timerObject(e.ledger, "active")
 	if a == nil {
@@ -455,7 +516,7 @@ func (e *managerTimerEngine) recover(ctx context.Context) error {
 		return err
 	}
 	if active := timerObject(e.ledger, "active"); active != nil && active["phase"] == "reserved" {
-		return e.release(ctx)
+		return e.releaseLocked(ctx)
 	}
 	return nil
 }
@@ -463,8 +524,8 @@ func (e *managerTimerEngine) recover(ctx context.Context) error {
 func (e *managerTimerEngine) recordUseful(useful map[string]any) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.failed {
-		return managerTimerStateInvalid
+	if err := e.refresh(); err != nil {
+		return err
 	}
 	a := timerObject(e.ledger, "active")
 	if a == nil || !managerTimerMember(a["phase"], "running|completed_unacked") || validateManagerTimerRecord("Useful", useful) != nil || !e.ports.verifyUseful(useful) {
@@ -495,8 +556,8 @@ func (e *managerTimerEngine) recordUseful(useful map[string]any) error {
 func (e *managerTimerEngine) ack(ctx context.Context, payload map[string]any) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.failed {
-		return managerTimerStateInvalid
+	if err := e.refresh(); err != nil {
+		return err
 	}
 	if validateManagerTimerRecord("Ack", payload) != nil {
 		return managerTimerAckUnproven
@@ -548,8 +609,8 @@ func (e *managerTimerEngine) ack(ctx context.Context, payload map[string]any) er
 func (e *managerTimerEngine) continueTick(tick map[string]any) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.failed {
-		return managerTimerStateInvalid
+	if err := e.refresh(); err != nil {
+		return err
 	}
 	if validateManagerTimerRecord("Tick", tick) != nil {
 		return managerTimerInvalid

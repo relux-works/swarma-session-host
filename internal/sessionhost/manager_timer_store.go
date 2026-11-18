@@ -35,6 +35,9 @@ type managerTimerHeldDirectory struct {
 }
 
 type managerTimerStore struct {
+	// Serialize complete timer operations across every engine using this held
+	// store. This is separate from file I/O and the ordinary/human input arbiter.
+	transaction                                            sync.Mutex
 	mu                                                     sync.Mutex
 	directories                                            []managerTimerHeldDirectory
 	root                                                   *os.Root
@@ -292,7 +295,10 @@ func (s *managerTimerStore) loadLocked() (map[string]any, error) {
 	return ledger, nil
 }
 
-func (s *managerTimerStore) save(ledger map[string]any) error {
+// Compare the complete expected durable ledger, not just its high-waters.
+// A stale writer cannot discard an unresolved attempt or restore an old phase
+// even when no counter changed. Initialization is a separate exclusive write.
+func (s *managerTimerStore) save(expected, ledger map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.checkHeld(); err != nil {
@@ -305,6 +311,9 @@ func (s *managerTimerStore) save(ledger map[string]any) error {
 		return err
 	}
 	if timerNumber(current, "revision_high_water") != s.revisionHighWater || timerNumber(current, "opportunity_high_water") != s.opportunityHighWater || timerNumber(current, "phase_revision") != s.phaseRevision {
+		return managerTimerStateInvalid
+	}
+	if expected == nil || !timerEqual(current, expected) {
 		return managerTimerStateInvalid
 	}
 	if validateManagerTimerRecord("Ledger", ledger) != nil || ledger["execution_id"] != s.witness.executionID || ledger["ledger_id"] != s.witness.ledgerID || timerNumber(ledger, "revision_high_water") < s.revisionHighWater || timerNumber(ledger, "opportunity_high_water") < s.opportunityHighWater || timerNumber(ledger, "phase_revision") < s.phaseRevision {

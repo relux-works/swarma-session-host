@@ -60,6 +60,18 @@ func managerTimerStoreFixture(t *testing.T, durability func(string) error) (*man
 	return s, witness, ledger
 }
 
+// Fixture setup deliberately writes a chosen valid journal. Production uses
+// the engine's own expected snapshot, never a freshly read substitute for CAS.
+func saveManagerTimerFixture(s *managerTimerStore, ledger map[string]any) error {
+	s.mu.Lock()
+	expected, err := s.loadLocked()
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.save(expected, ledger)
+}
+
 // A single immutable lock serializes independent opens; explicit initialization
 // witnesses survive close/reopen, while journal high-waters cannot regress.
 func TestManagerTimerStorePersistenceAndLock(t *testing.T) {
@@ -72,11 +84,11 @@ func TestManagerTimerStorePersistenceAndLock(t *testing.T) {
 		t.Fatalf("parallel open=%v", err)
 	}
 	ledger["opportunity_high_water"] = json.Number("35")
-	if err := s.save(ledger); err != nil {
+	if err := saveManagerTimerFixture(s, ledger); err != nil {
 		t.Fatal(err)
 	}
 	ledger["opportunity_high_water"] = json.Number("34")
-	if err := s.save(ledger); err != managerTimerStateInvalid {
+	if err := saveManagerTimerFixture(s, ledger); err != managerTimerStateInvalid {
 		t.Fatalf("regressing HWM=%v", err)
 	}
 	if err := s.Close(); err != nil {
@@ -176,11 +188,11 @@ func TestManagerTimerStoreDurabilityFailures(t *testing.T) {
 				return nil
 			}
 			ledger["opportunity_high_water"] = json.Number("1")
-			if err := s.save(ledger); err != managerTimerIOUnavailable {
+			if err := saveManagerTimerFixture(s, ledger); err != managerTimerIOUnavailable {
 				t.Fatalf("save=%v", err)
 			}
 			s.durability = nil
-			if err := s.save(ledger); err != managerTimerStateInvalid {
+			if err := saveManagerTimerFixture(s, ledger); err != managerTimerStateInvalid {
 				t.Fatalf("unfenced retry=%v", err)
 			}
 		})
@@ -228,7 +240,7 @@ func TestManagerTimerStoreHeldAncestryAndLiveLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	ledger["opportunity_high_water"] = json.Number("1")
-	if err := s.save(ledger); err != managerTimerStateInvalid {
+	if err := saveManagerTimerFixture(s, ledger); err != managerTimerStateInvalid {
 		t.Fatalf("write after lock replacement=%v", err)
 	}
 }

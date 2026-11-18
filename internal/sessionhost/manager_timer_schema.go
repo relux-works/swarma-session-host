@@ -400,6 +400,14 @@ func validateManagerTimerResult(o map[string]any) error {
 	if managerTimerMember(d, "absent|suppressed") && n["turn_id"] != nil {
 		return managerTimerInvalid
 	}
+	if managerTimerMember(d, "absent|suppressed") {
+		// Closed compatibility table: a real refusal has its exact reason;
+		// none is reserved for explicit cleanup, whose state Query must also
+		// prove in the engine. provider_unavailable belongs only to unknown.
+		if !managerTimerMember(o["reason"], "input_ineligible|security_refused|budget_refused|expired|binding_mismatch|role_refused|capability_missing|cancelled") && !(o["reason"] == "none" && managerTimerMember(op, "release|query")) {
+			return managerTimerInvalid
+		}
+	}
 	if managerTimerMember(d, "reserved|queued|running|completed_ok|completed_failed|completed_interrupted") {
 		if o["reason"] != "none" || o["claim"] == nil {
 			return managerTimerInvalid
